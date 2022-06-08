@@ -76,7 +76,6 @@ function demo() {
     const patterns = [...new Set(rules.flatMap(r => Object.keys(r.rewrites)))];
     const grid = new PatternMatcher(alphabet, patterns).makeGrid(GRID_SIZE, GRID_SIZE);
     
-    console.log(window.innerHeight);
     const scale = Math.max(1, Math.floor(window.innerHeight / grid.height));
     displayGrid(grid, scale);
     

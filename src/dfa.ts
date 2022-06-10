@@ -45,7 +45,7 @@ namespace Regex {
 
 type NFANode = {
     readonly epsilons: number[],
-    readonly letters: ISet,
+    readonly letters: readonly number[],
     readonly nextID: number,
     acceptSet: ISet,
 }
@@ -63,8 +63,8 @@ class NFA<S, T> {
     }
     
     private makeNode(epsilons: number[]): number;
-    private makeNode(epsilons: number[], letters: ISet, nextID: number): number;
-    private makeNode(epsilons: number[], letters: ISet = ISet.EMPTY, nextID: number = -1): number {
+    private makeNode(epsilons: number[], letters: readonly number[], nextID: number): number;
+    private makeNode(epsilons: number[], letters: readonly number[] = [], nextID: number = -1): number {
         const {nodes} = this;
         const id = nodes.length;
         nodes.push({epsilons, letters, nextID, acceptSet: ISet.EMPTY});
@@ -75,11 +75,11 @@ class NFA<S, T> {
         // https://en.wikipedia.org/wiki/Thompson's_construction
         switch(regex.kind) {
             case Regex.Kind.LETTERS: {
-                const lettersSet = this.alphabet.toIDSet(regex.letters);
+                const lettersSet = this.alphabet.toIDs(regex.letters);
                 return this.makeNode([], lettersSet, outID);
             }
             case Regex.Kind.WILDCARD: {
-                return this.makeNode([], ISet.full(this.alphabet.size()), outID);
+                return this.makeNode([], makeArray(this.alphabet.size(), i => i), outID);
             }
             case Regex.Kind.CONCAT: {
                 const {children} = regex;
@@ -111,43 +111,55 @@ class NFA<S, T> {
         
         const alphabetSize = this.alphabet.size();
         const nfaNodes = this.nodes;
-        const nfaStates = new IDMap<ISet>();
+        const nfaStates: ReadonlySet<number>[] = [];
+        const nfaStateMap = new Map<ISet, number>();
         const dfaNodes: DFANode[] = [];
         const {acceptMap} = this;
         
-        function getNodeID(nfaState: ISet): number {
+        function getNodeID(nfaState: Set<number>): number {
             // epsilon closure, by depth-first search
-            const stack = ISet.toArray(nfaState);
+            // use Set<number> instead of ISet for the state, for performance
+            const stack = [...nfaState];
             while(stack.length > 0) {
                 const nfaNodeID = stack.pop()!;
                 for(const eps of nfaNodes[nfaNodeID].epsilons) {
-                    if(!ISet.has(nfaState, eps)) {
-                        nfaState |= ISet.singleton(eps);
+                    if(!nfaState.has(eps)) {
+                        nfaState.add(eps);
                         stack.push(eps);
                     }
                 }
             }
             
-            return nfaStates.getOrCreateID(nfaState);
+            // need to use a primitive key which will be compared by value
+            // surprisingly, this is the most expensive part; ISet is faster than sorting and joining as a string
+            const key = ISet.of(nfaNodes.length, nfaState);
+            
+            let index = nfaStateMap.get(key);
+            if(index === undefined) {
+                index = nfaStates.length;
+                nfaStates.push(nfaState);
+                nfaStateMap.set(key, index);
+            }
+            return index;
         }
         
-        const startID = getNodeID(ISet.singleton(this.startID));
+        const startID = getNodeID(new Set([this.startID]));
         // sanity check
         if(startID !== 0) { throw new Error(); }
         
         const acceptSetMap = new IDMap<ISet>();
         
         // this loop iterates over `nfaStates`, while pushing to it via `getNodeID`
-        for(let nfaStateID = 0; nfaStateID < nfaStates.size(); ++nfaStateID) {
-            const transitionStates = emptyArray(alphabetSize, ISet.EMPTY);
+        for(let nfaStateID = 0; nfaStateID < nfaStates.length; ++nfaStateID) {
+            const transitionStates: Set<number>[] = makeArray(alphabetSize, () => new Set());
             let acceptSet = ISet.EMPTY;
-            ISet.forEach(nfaStates.getByID(nfaStateID), nfaNodeID => {
+            for(const nfaNodeID of nfaStates[nfaStateID]) {
                 const nfaNode = nfaNodes[nfaNodeID];
-                ISet.forEach(nfaNode.letters, letterID => {
-                    transitionStates[letterID] |= ISet.singleton(nfaNode.nextID);
-                });
+                for(const letterID of nfaNode.letters) {
+                    transitionStates[letterID].add(nfaNode.nextID);
+                }
                 acceptSet |= nfaNode.acceptSet;
-            });
+            }
             
             const acceptSetID = acceptSetMap.getOrCreateID(acceptSet);
             const transitions = transitionStates.map(getNodeID);
@@ -205,12 +217,12 @@ class DFA<T> {
     /**
      * Returns an array mapping each acceptID to the set of node IDs which accept it.
      */
-    private computeAcceptingStates(): readonly ISet[] {
+    private computeAcceptingStates(): Iterable<readonly number[]> {
         const {nodes, acceptMap} = this;
-        const table = emptyArray(acceptMap.size(), ISet.EMPTY);
+        const table: number[][] = makeArray(acceptMap.size(), () => []);
         for(let id = 0; id < nodes.length; ++id) {
             for(const acceptID of nodes[id].acceptIDs) {
-                table[acceptID] |= ISet.singleton(id);
+                table[acceptID].push(id);
             }
         }
         return table;
@@ -243,7 +255,7 @@ class DFA<T> {
             for(let c = 0; c < alphabetSize; ++c) {
                 let x = ISet.EMPTY;
                 for(const id of a) { x |= inverseTransitions[c + id * alphabetSize]; }
-                partition.refine(x);
+                partition.refine(ISet.toArray(x));
                 
                 // shortcut if the DFA cannot be minimised
                 if(partition.countSubsets() === nodes.length) { return this; }

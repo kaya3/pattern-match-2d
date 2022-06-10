@@ -164,17 +164,17 @@ class Partition {
      * 
      * The time complexity is linear in the size of the given set.
      */
-    public refine(set: ISet): void {
+    public refine(set: readonly number[]): void {
         const {unprocessed, map} = this;
         const splits: PartitionSubset[] = [];
-        ISet.forEach(set, x => {
+        for(const x of set) {
             const subset = map[x];
             if(subset.sibling === undefined) {
                 splits.push(subset);
                 subset.sibling = this.makeSubset(subset.end, subset.end, subset.isUnprocessed);
             }
             this.moveToSibling(x, subset);
-        });
+        }
         
         for(const subset of splits) {
             if(subset.start === subset.end) {

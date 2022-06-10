@@ -74,10 +74,10 @@ class IDMap<T> {
     }
     
     /**
-     * Returns a set containing the IDs of the elements in the given array.
+     * Returns an array containing the IDs of the given elements.
      */
-    public toIDSet(arr: readonly T[]): ISet {
-        return ISet.of(arr.map(x => this.getID(x)));
+    public toIDs(arr: readonly T[]): number[] {
+        return arr.map(x => this.getID(x));
     }
     
     public forEach(f: (x: T, id: number) => void): void {

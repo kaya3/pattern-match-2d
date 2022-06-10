@@ -132,14 +132,14 @@ class Partition {
     refine(set) {
         const { unprocessed, map } = this;
         const splits = [];
-        ISet.forEach(set, x => {
+        for (const x of set) {
             const subset = map[x];
             if (subset.sibling === undefined) {
                 splits.push(subset);
                 subset.sibling = this.makeSubset(subset.end, subset.end, subset.isUnprocessed);
             }
             this.moveToSibling(x, subset);
-        });
+        }
         for (const subset of splits) {
             if (subset.start === subset.end) {
                 this.deleteSubset(subset);
@@ -213,7 +213,7 @@ class NFA {
         this.startID = this.makeFromRegex(regex, this.makeNode([]));
         //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabet.size()}`);
     }
-    makeNode(epsilons, letters = ISet.EMPTY, nextID = -1) {
+    makeNode(epsilons, letters = [], nextID = -1) {
         const { nodes } = this;
         const id = nodes.length;
         nodes.push({ epsilons, letters, nextID, acceptSet: ISet.EMPTY });
@@ -223,11 +223,11 @@ class NFA {
         // https://en.wikipedia.org/wiki/Thompson's_construction
         switch (regex.kind) {
             case 0 /* LETTERS */: {
-                const lettersSet = this.alphabet.toIDSet(regex.letters);
+                const lettersSet = this.alphabet.toIDs(regex.letters);
                 return this.makeNode([], lettersSet, outID);
             }
             case 1 /* WILDCARD */: {
-                return this.makeNode([], ISet.full(this.alphabet.size()), outID);
+                return this.makeNode([], makeArray(this.alphabet.size(), i => i), outID);
             }
             case 2 /* CONCAT */: {
                 const { children } = regex;
@@ -257,40 +257,51 @@ class NFA {
         // https://en.wikipedia.org/wiki/Powerset_construction
         const alphabetSize = this.alphabet.size();
         const nfaNodes = this.nodes;
-        const nfaStates = new IDMap();
+        const nfaStates = [];
+        const nfaStateMap = new Map();
         const dfaNodes = [];
         const { acceptMap } = this;
         function getNodeID(nfaState) {
             // epsilon closure, by depth-first search
-            const stack = ISet.toArray(nfaState);
+            // use Set<number> instead of ISet for the state, for performance
+            const stack = [...nfaState];
             while (stack.length > 0) {
                 const nfaNodeID = stack.pop();
                 for (const eps of nfaNodes[nfaNodeID].epsilons) {
-                    if (!ISet.has(nfaState, eps)) {
-                        nfaState |= ISet.singleton(eps);
+                    if (!nfaState.has(eps)) {
+                        nfaState.add(eps);
                         stack.push(eps);
                     }
                 }
             }
-            return nfaStates.getOrCreateID(nfaState);
+            // need to use a primitive key which will be compared by value
+            // surprisingly, this is the most expensive part; ISet is faster than sorting and joining as a string
+            const key = ISet.of(nfaNodes.length, nfaState);
+            let index = nfaStateMap.get(key);
+            if (index === undefined) {
+                index = nfaStates.length;
+                nfaStates.push(nfaState);
+                nfaStateMap.set(key, index);
+            }
+            return index;
         }
-        const startID = getNodeID(ISet.singleton(this.startID));
+        const startID = getNodeID(new Set([this.startID]));
         // sanity check
         if (startID !== 0) {
             throw new Error();
         }
         const acceptSetMap = new IDMap();
         // this loop iterates over `nfaStates`, while pushing to it via `getNodeID`
-        for (let nfaStateID = 0; nfaStateID < nfaStates.size(); ++nfaStateID) {
-            const transitionStates = emptyArray(alphabetSize, ISet.EMPTY);
+        for (let nfaStateID = 0; nfaStateID < nfaStates.length; ++nfaStateID) {
+            const transitionStates = makeArray(alphabetSize, () => new Set());
             let acceptSet = ISet.EMPTY;
-            ISet.forEach(nfaStates.getByID(nfaStateID), nfaNodeID => {
+            for (const nfaNodeID of nfaStates[nfaStateID]) {
                 const nfaNode = nfaNodes[nfaNodeID];
-                ISet.forEach(nfaNode.letters, letterID => {
-                    transitionStates[letterID] |= ISet.singleton(nfaNode.nextID);
-                });
+                for (const letterID of nfaNode.letters) {
+                    transitionStates[letterID].add(nfaNode.nextID);
+                }
                 acceptSet |= nfaNode.acceptSet;
-            });
+            }
             const acceptSetID = acceptSetMap.getOrCreateID(acceptSet);
             const transitions = transitionStates.map(getNodeID);
             dfaNodes.push({
@@ -340,10 +351,10 @@ class DFA {
      */
     computeAcceptingStates() {
         const { nodes, acceptMap } = this;
-        const table = emptyArray(acceptMap.size(), ISet.EMPTY);
+        const table = makeArray(acceptMap.size(), () => []);
         for (let id = 0; id < nodes.length; ++id) {
             for (const acceptID of nodes[id].acceptIDs) {
-                table[acceptID] |= ISet.singleton(id);
+                table[acceptID].push(id);
             }
         }
         return table;
@@ -376,7 +387,7 @@ class DFA {
                 for (const id of a) {
                     x |= inverseTransitions[c + id * alphabetSize];
                 }
-                partition.refine(x);
+                partition.refine(ISet.toArray(x));
                 // shortcut if the DFA cannot be minimised
                 if (partition.countSubsets() === nodes.length) {
                     return this;
@@ -748,10 +759,10 @@ class IDMap {
         return ISet.map(ids, id => this.getByID(id));
     }
     /**
-     * Returns a set containing the IDs of the elements in the given array.
+     * Returns an array containing the IDs of the given elements.
      */
-    toIDSet(arr) {
-        return ISet.of(arr.map(x => this.getID(x)));
+    toIDs(arr) {
+        return arr.map(x => this.getID(x));
     }
     forEach(f) {
         this.arr.forEach(f);
@@ -847,12 +858,19 @@ var ISet;
     }
     ISet.full = full;
     /**
-     * Creates a set from an iterable of natural numbers.
+     * Creates a set from an iterable of natural numbers, all of which must be
+     * less than `domainSize`.
      */
-    function of(xs) {
-        let set = ISet.EMPTY;
+    function of(domainSize, xs) {
+        // deal with 32 bits at a time; int32 operations are much faster than bigint
+        const arr = new Uint32Array(((domainSize - 1) >> 5) + 1);
         for (const x of xs) {
-            set |= singleton(x);
+            arr[x >> 5] |= 1 << (x & 31);
+        }
+        let set = BigInt(arr[arr.length - 1]);
+        for (let i = arr.length - 2; i >= 0; --i) {
+            set <<= 32n;
+            set |= BigInt(arr[i]);
         }
         return set;
     }
@@ -864,22 +882,6 @@ var ISet;
         return (set & singleton(x)) !== ISet.EMPTY;
     }
     ISet.has = has;
-    function forEach(set, f) {
-        for (let i = 0; set !== ISet.EMPTY; ++i, set >>= 1n) {
-            if (set & 1n) {
-                f(i);
-            }
-        }
-    }
-    ISet.forEach = forEach;
-    function map(set, f) {
-        const arr = [];
-        forEach(set, x => {
-            arr.push(f(x));
-        });
-        return arr;
-    }
-    ISet.map = map;
     /**
      * Returns a new array of the natural numbers in the given set.
      */
@@ -887,6 +889,21 @@ var ISet;
         return map(set, x => x);
     }
     ISet.toArray = toArray;
+    function map(set, f) {
+        const arr = [];
+        for (let x = 0; set !== 0n; x += 32, set >>= 32n) {
+            // deal with 32 bits at a time; int32 operations are much faster than bigint
+            let setPart = Number(BigInt.asIntN(32, set)) | 0;
+            while (setPart !== 0) {
+                // position of the highest 1 bit
+                const dx = 31 - Math.clz32(setPart);
+                arr.push(f(x + dx));
+                setPart ^= 1 << dx;
+            }
+        }
+        return arr;
+    }
+    ISet.map = map;
 })(ISet || (ISet = {}));
 ///<reference path="dfa.ts"/>
 ///<reference path="display.ts"/>

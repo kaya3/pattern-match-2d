@@ -79,13 +79,18 @@ class Partition {
      * whole range).
      */
     public constructor(n: number) {
-        const arr: number[] = [];
-        for(let i = 0; i < n; ++i) { arr.push(i); }
-        this.arr = arr;
-        this.indices = arr.slice();
+        this.arr = makeArray(n, i => i);
+        this.indices = makeArray(n, i => i);
         
         const initialSubset = this.makeSubset(0, n, true);
         this.map = emptyArray(n, initialSubset);
+    }
+    
+    /**
+     * Returns the number of subsets in this partition.
+     */
+    public countSubsets(): number {
+        return this.subsets.length;
     }
     
     private makeSubset(start: number, end: number, isUnprocessed: boolean): PartitionSubset {

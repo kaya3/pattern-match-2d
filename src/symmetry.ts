@@ -6,11 +6,10 @@ namespace Symmetry {
      */
     export const rotate: SymmetryFunction = p => {
         const rows = p.split('/');
-        const out: string[] = [];
-        for(let i = 0; i < rows[0].length; ++i) {
-            out.push(rows.map(row => row[i]).join(''));
-        }
-        return out.join('/');
+        return makeArray(
+            rows[0].length,
+            i => rows.map(row => row[i]).join(''),
+        ).join('/');
     };
     
     /**

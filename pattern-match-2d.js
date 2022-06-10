@@ -49,14 +49,16 @@ class Partition {
      * whole range).
      */
     constructor(n) {
-        const arr = [];
-        for (let i = 0; i < n; ++i) {
-            arr.push(i);
-        }
-        this.arr = arr;
-        this.indices = arr.slice();
+        this.arr = makeArray(n, i => i);
+        this.indices = makeArray(n, i => i);
         const initialSubset = this.makeSubset(0, n, true);
         this.map = emptyArray(n, initialSubset);
+    }
+    /**
+     * Returns the number of subsets in this partition.
+     */
+    countSubsets() {
+        return this.subsets.length;
     }
     makeSubset(start, end, isUnprocessed) {
         const { subsets } = this;
@@ -209,6 +211,7 @@ class NFA {
     constructor(alphabet, regex) {
         this.alphabet = alphabet;
         this.startID = this.makeFromRegex(regex, this.makeNode([]));
+        //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabet.size()}`);
     }
     makeNode(epsilons, letters = ISet.EMPTY, nextID = -1) {
         const { nodes } = this;
@@ -258,15 +261,14 @@ class NFA {
         const dfaNodes = [];
         const { acceptMap } = this;
         function getNodeID(nfaState) {
-            // epsilon closure
-            let arr = ISet.toArray(nfaState);
-            // this loop iterates over `arr`, while pushing to it
-            for (let i = 0; i < arr.length; ++i) {
-                const nfaNodeID = arr[i];
+            // epsilon closure, by depth-first search
+            const stack = ISet.toArray(nfaState);
+            while (stack.length > 0) {
+                const nfaNodeID = stack.pop();
                 for (const eps of nfaNodes[nfaNodeID].epsilons) {
                     if (!ISet.has(nfaState, eps)) {
                         nfaState |= ISet.singleton(eps);
-                        arr.push(eps);
+                        stack.push(eps);
                     }
                 }
             }
@@ -310,22 +312,28 @@ class DFA {
         this.acceptMap = acceptMap;
         this.acceptSetMap = acceptSetMap;
         this.nodes = nodes;
+        //console.log(`DFA with ${nodes.length} nodes on alphabet of size ${alphabetSize}, ${acceptMap.size()} accepts and ${acceptSetMap.size()} accept sets`);
     }
-    go(stateID, letterID) {
-        const { nodes } = this;
-        if (stateID >= 0 && stateID < nodes.length) {
-            const t = this.nodes[stateID].transitions;
-            return letterID >= 0 && letterID < t.length ? t[letterID] : -1;
+    /**
+     * Returns the number of distinct states of this DFA.
+     */
+    size() {
+        return this.nodes.length;
+    }
+    go(state, letterID) {
+        const { nodes, alphabetSize } = this;
+        if (state >= 0 && state < nodes.length && letterID >= 0 && letterID < alphabetSize) {
+            return nodes[state].transitions[letterID];
         }
         else {
-            return -1;
+            throw new Error();
         }
     }
-    getAcceptIDs(stateID) {
-        return this.nodes[stateID].acceptIDs;
+    getAcceptIDs(state) {
+        return this.nodes[state].acceptIDs;
     }
-    getAcceptSetID(stateID) {
-        return this.nodes[stateID].acceptSetID;
+    getAcceptSetID(state) {
+        return this.nodes[state].acceptSetID;
     }
     /**
      * Returns an array mapping each acceptID to the set of node IDs which accept it.
@@ -334,7 +342,7 @@ class DFA {
         const { nodes, acceptMap } = this;
         const table = emptyArray(acceptMap.size(), ISet.EMPTY);
         for (let id = 0; id < nodes.length; ++id) {
-            for (const acceptID of this.getAcceptIDs(id)) {
+            for (const acceptID of nodes[id].acceptIDs) {
                 table[acceptID] |= ISet.singleton(id);
             }
         }
@@ -369,6 +377,10 @@ class DFA {
                     x |= inverseTransitions[c + id * alphabetSize];
                 }
                 partition.refine(x);
+                // shortcut if the DFA cannot be minimised
+                if (partition.countSubsets() === nodes.length) {
+                    return this;
+                }
             }
         }
         const reps = new IDMap();
@@ -487,9 +499,9 @@ class PatternMatcher {
             return ISet.toArray(p & ~q);
         });
     }
-    getAcceptSetDiff(pStateID, qStateID) {
+    getAcceptSetDiff(pState, qState) {
         const { colDFA, acceptSetMapSize: k } = this;
-        const pID = colDFA.getAcceptSetID(pStateID), qID = colDFA.getAcceptSetID(qStateID);
+        const pID = colDFA.getAcceptSetID(pState), qID = colDFA.getAcceptSetID(qState);
         return this.acceptSetDiffs[pID + k * qID];
     }
     makeGrid(width, height) {
@@ -527,10 +539,9 @@ class Grid {
         this.width = width;
         this.height = height;
         const n = width * height;
-        // TODO: use Uint8Array/Uint16Array where possible
-        this.grid = emptyArray(n, 0);
-        this.rowStates = emptyArray(n, 0);
-        this.colStates = emptyArray(n, 0);
+        this.grid = makeUintArray(n, matcher.alphabet.size());
+        this.rowStates = makeUintArray(n, matcher.rowDFA.size());
+        this.colStates = makeUintArray(n, matcher.colDFA.size());
         this.matchIndices = makeArray(matcher.numPatterns, () => new SampleableSet());
         this.recompute(0, 0, width, height);
     }
@@ -622,13 +633,13 @@ class Grid {
         // recompute rowStates
         let minChangedX = startX;
         for (let y = startY; y < endY; ++y) {
-            let stateID = endX === width ? 0 : rowStates[this._index(endX, y)];
+            let state = endX === width ? 0 : rowStates[this._index(endX, y)];
             for (let x = endX - 1; x >= 0; --x) {
                 // O(1) time per iteration
                 const index = this._index(x, y);
-                stateID = rowDFA.go(stateID, grid[index]);
-                if (stateID !== rowStates[index]) {
-                    rowStates[index] = stateID;
+                state = rowDFA.go(state, grid[index]);
+                if (state !== rowStates[index]) {
+                    rowStates[index] = state;
                     minChangedX = Math.min(minChangedX, x);
                 }
                 else if (x < startX) {
@@ -638,21 +649,21 @@ class Grid {
         }
         // recompute colStates
         for (let x = minChangedX; x < endX; ++x) {
-            let stateID = endY === height ? 0 : colStates[this._index(x, endY)];
+            let state = endY === height ? 0 : colStates[this._index(x, endY)];
             for (let y = endY - 1; y >= 0; --y) {
                 // O(m) time per iteration, where m is the number of new + broken matches
                 const index = this._index(x, y);
                 const acceptSetID = rowDFA.getAcceptSetID(rowStates[index]);
-                stateID = colDFA.go(stateID, acceptSetID);
-                const oldStateID = colStates[index];
-                if (stateID !== oldStateID) {
-                    colStates[index] = stateID;
+                state = colDFA.go(state, acceptSetID);
+                const oldState = colStates[index];
+                if (state !== oldState) {
+                    colStates[index] = state;
                     // remove broken matches
-                    for (const acceptID of matcher.getAcceptSetDiff(oldStateID, stateID)) {
+                    for (const acceptID of matcher.getAcceptSetDiff(oldState, state)) {
                         matchIndices[acceptID].delete(index);
                     }
                     // add new matches
-                    for (const acceptID of matcher.getAcceptSetDiff(stateID, oldStateID)) {
+                    for (const acceptID of matcher.getAcceptSetDiff(state, oldState)) {
                         matchIndices[acceptID].add(index);
                     }
                 }
@@ -667,6 +678,10 @@ class Grid {
  * Assigns unique, incremental IDs to a set of values.
  */
 class IDMap {
+    /**
+     * Creates a new IDMap with the distinct elements from `iterable`, with IDs
+     * in order of first occurrence.
+     */
     static of(iterable) {
         const map = new IDMap();
         for (const x of iterable) {
@@ -684,9 +699,19 @@ class IDMap {
      * Invariant: `ids.get(x) === i` if and only if `arr[i] === x`
      */
     ids = new Map();
+    /**
+     * Returns the number of elements in the map.
+     */
     size() {
         return this.arr.length;
     }
+    /**
+     * Adds an element to the map if it is not already present, and returns the
+     * element's ID, in O(1) time.
+     *
+     * The callback function `ifNew` is called if the element was not already
+     * present in the map.
+     */
     getOrCreateID(x, ifNew) {
         let id = this.ids.get(x);
         if (id === undefined) {
@@ -697,6 +722,9 @@ class IDMap {
         }
         return id;
     }
+    /**
+     * Returns the ID of the given element, in O(1) time.
+     */
     getID(x) {
         const r = this.ids.get(x);
         if (r === undefined) {
@@ -704,12 +732,24 @@ class IDMap {
         }
         return r;
     }
-    getByID(i) {
-        return this.arr[i];
+    /**
+     * Returns the element associated with the given ID, in O(1) time.
+     */
+    getByID(id) {
+        if (id < 0 || id >= this.arr.length) {
+            throw new Error();
+        }
+        return this.arr[id];
     }
+    /**
+     * Returns an array of elements whose IDs are present in the given set.
+     */
     getByIDs(ids) {
         return ISet.map(ids, id => this.getByID(id));
     }
+    /**
+     * Returns a set containing the IDs of the elements in the given array.
+     */
     toIDSet(arr) {
         return ISet.of(arr.map(x => this.getID(x)));
     }
@@ -737,12 +777,21 @@ class SampleableSet {
      * Invariant: `arr[i] === x` if and only if `indices.get(x) === i`
      */
     indices = new Map();
+    /**
+     * Returns the number of elements in the set.
+     */
     size() {
         return this.arr.length;
     }
+    /**
+     * Indicates whether the given value is a member of the set, in O(1) time.
+     */
     has(x) {
         return this.indices.has(x);
     }
+    /**
+     * Adds an element to the set, if it is not already present, in O(1) time.
+     */
     add(x) {
         const { arr, indices } = this;
         if (!indices.has(x)) {
@@ -750,6 +799,9 @@ class SampleableSet {
             arr.push(x);
         }
     }
+    /**
+     * Deletes an element from the set, if it is present, in O(1) time.
+     */
     delete(x) {
         const { arr, indices } = this;
         const i = indices.get(x);
@@ -832,17 +884,17 @@ var ISet;
      * Returns a new array of the natural numbers in the given set.
      */
     function toArray(set) {
-        return ISet.map(set, x => x);
+        return map(set, x => x);
     }
     ISet.toArray = toArray;
 })(ISet || (ISet = {}));
 ///<reference path="dfa.ts"/>
 ///<reference path="display.ts"/>
-function demo() {
-    const GRID_SIZE = 256;
-    const SPEED = 1 << 6;
+function runDemo(size = 2) {
+    const GRID_SIZE = (1 << 7) * size;
+    const SPEED = 16 * size * size;
     const LAKE_SEEDS = 4;
-    const LAKE_SIZE = 128 * 128;
+    const LAKE_SIZE = (1 << 12) * size * size;
     const LAND_SEEDS = 32;
     const alphabet = 'BWREI';
     const rules = [
@@ -904,7 +956,6 @@ function demo() {
     }
     const patterns = [...new Set(rules.flatMap(r => Object.keys(r.rewrites)))];
     const grid = new PatternMatcher(alphabet, patterns).makeGrid(GRID_SIZE, GRID_SIZE);
-    console.log(window.innerHeight);
     const scale = Math.max(1, Math.floor(window.innerHeight / grid.height));
     displayGrid(grid, scale);
     function frameHandler() {
@@ -915,11 +966,29 @@ function demo() {
     requestAnimationFrame(frameHandler);
 }
 /**
+ * Creates an empty array of length `n`, which can hold unsigned integers less
+ * than `domainSize` (exclusive). The array is initially filled with zeroes.
+ */
+function makeUintArray(n, domainSize) {
+    if (domainSize <= (1 << 8)) {
+        return new Uint8Array(n);
+    }
+    else if (domainSize <= (1 << 16)) {
+        return new Uint16Array(n);
+    }
+    else {
+        return new Uint32Array(n);
+    }
+}
+/**
  * Creates an empty array of length `n`, filled with the given value.
  */
 function emptyArray(n, value) {
     return makeArray(n, () => value);
 }
+/**
+ * Creates an array of length `n`, initialised using the given callback function.
+ */
 function makeArray(n, f) {
     // equivalent to `Array(n).map((_, i) => f(i))`, but guarantees an array without holes, which may be more performant to use
     const arr = [];
@@ -941,11 +1010,7 @@ var Symmetry;
      */
     Symmetry.rotate = p => {
         const rows = p.split('/');
-        const out = [];
-        for (let i = 0; i < rows[0].length; ++i) {
-            out.push(rows.map(row => row[i]).join(''));
-        }
-        return out.join('/');
+        return makeArray(rows[0].length, i => rows.map(row => row[i]).join('')).join('/');
     };
     /**
      * Reflects a pattern from top to bottom.

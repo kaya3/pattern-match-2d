@@ -77,9 +77,9 @@ class PatternMatcher {
         });
     }
     
-    public getAcceptSetDiff(pStateID: number, qStateID: number): readonly number[] {
+    public getAcceptSetDiff(pState: number, qState: number): readonly number[] {
         const {colDFA, acceptSetMapSize: k} = this;
-        const pID = colDFA.getAcceptSetID(pStateID), qID = colDFA.getAcceptSetID(qStateID);
+        const pID = colDFA.getAcceptSetID(pState), qID = colDFA.getAcceptSetID(qState);
         return this.acceptSetDiffs[pID + k * qID];
     }
     
@@ -94,15 +94,15 @@ class Grid {
     /**
      * Maps each index `(x + width * y)` to the ID of the symbol at (x, y).
      */
-    private readonly grid: number[];
+    private readonly grid: UintArray;
     /**
      * Maps each index `(x + width * y)` to the row-DFA state at (x, y).
      */
-    private readonly rowStates: number[];
+    private readonly rowStates: UintArray;
     /**
      * Maps each index `(x + width * y)` to the column-DFA state at (x, y).
      */
-    private readonly colStates: number[];
+    private readonly colStates: UintArray;
     
     /**
      * Maps each pattern ID to the set of indices `(x + width * y)` where that pattern is matched at (x, y).
@@ -122,10 +122,9 @@ class Grid {
         public readonly height: number,
     ) {
         const n = width * height;
-        // TODO: use Uint8Array/Uint16Array where possible
-        this.grid = emptyArray(n, 0);
-        this.rowStates = emptyArray(n, 0);
-        this.colStates = emptyArray(n, 0);
+        this.grid = makeUintArray(n, matcher.alphabet.size());
+        this.rowStates = makeUintArray(n, matcher.rowDFA.size());
+        this.colStates = makeUintArray(n, matcher.colDFA.size());
         this.matchIndices = makeArray(matcher.numPatterns, () => new SampleableSet());
         
         this.recompute(0, 0, width, height);
@@ -228,14 +227,14 @@ class Grid {
         // recompute rowStates
         let minChangedX = startX;
         for(let y = startY; y < endY; ++y) {
-            let stateID = endX === width ? 0 : rowStates[this._index(endX, y)];
+            let state = endX === width ? 0 : rowStates[this._index(endX, y)];
             for(let x = endX - 1; x >= 0; --x) {
                 // O(1) time per iteration
                 
                 const index = this._index(x, y);
-                stateID = rowDFA.go(stateID, grid[index]);
-                if(stateID !== rowStates[index]) {
-                    rowStates[index] = stateID;
+                state = rowDFA.go(state, grid[index]);
+                if(state !== rowStates[index]) {
+                    rowStates[index] = state;
                     minChangedX = Math.min(minChangedX, x);
                 } else if(x < startX) {
                     break;
@@ -245,23 +244,23 @@ class Grid {
         
         // recompute colStates
         for(let x = minChangedX; x < endX; ++x) {
-            let stateID = endY === height ? 0 : colStates[this._index(x, endY)];
+            let state = endY === height ? 0 : colStates[this._index(x, endY)];
             for(let y = endY - 1; y >= 0; --y) {
                 // O(m) time per iteration, where m is the number of new + broken matches
                 
                 const index = this._index(x, y);
                 const acceptSetID = rowDFA.getAcceptSetID(rowStates[index]);
-                stateID = colDFA.go(stateID, acceptSetID);
-                const oldStateID = colStates[index];
-                if(stateID !== oldStateID) {
-                    colStates[index] = stateID;
+                state = colDFA.go(state, acceptSetID);
+                const oldState = colStates[index];
+                if(state !== oldState) {
+                    colStates[index] = state;
                     
                     // remove broken matches
-                    for(const acceptID of matcher.getAcceptSetDiff(oldStateID, stateID)) {
+                    for(const acceptID of matcher.getAcceptSetDiff(oldState, state)) {
                         matchIndices[acceptID].delete(index);
                     }
                     // add new matches
-                    for(const acceptID of matcher.getAcceptSetDiff(stateID, oldStateID)) {
+                    for(const acceptID of matcher.getAcceptSetDiff(state, oldState)) {
                         matchIndices[acceptID].add(index);
                     }
                 } else if(y < startY) {

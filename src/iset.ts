@@ -14,7 +14,7 @@ type ISet = bigint
  * numbers.
  */
 namespace ISet {
-    export const EMPTY = 0n as ISet;
+    export const EMPTY: ISet = 0n;
     
     /**
      * Creates a set of one element.
@@ -64,6 +64,6 @@ namespace ISet {
      * Returns a new array of the natural numbers in the given set.
      */
     export function toArray(set: ISet): number[] {
-        return ISet.map(set, x => x);
+        return map(set, x => x);
     }
 }

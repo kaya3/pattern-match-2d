@@ -2,6 +2,10 @@
  * Assigns unique, incremental IDs to a set of values.
  */
 class IDMap<T> {
+    /**
+     * Creates a new IDMap with the distinct elements from `iterable`, with IDs
+     * in order of first occurrence.
+     */
     public static of<T>(iterable: Iterable<T>): IDMap<T> {
         const map = new IDMap<T>();
         for(const x of iterable) { map.getOrCreateID(x); }
@@ -20,10 +24,20 @@ class IDMap<T> {
      */
     private readonly ids = new Map<T, number>();
     
+    /**
+     * Returns the number of elements in the map.
+     */
     public size(): number {
         return this.arr.length;
     }
     
+    /**
+     * Adds an element to the map if it is not already present, and returns the
+     * element's ID, in O(1) time.
+     * 
+     * The callback function `ifNew` is called if the element was not already
+     * present in the map.
+     */
     public getOrCreateID(x: T, ifNew?: (id: number) => void): number {
         let id = this.ids.get(x);
         if(id === undefined) {
@@ -34,17 +48,34 @@ class IDMap<T> {
         }
         return id;
     }
+    
+    /**
+     * Returns the ID of the given element, in O(1) time.
+     */
     public getID(x: T): number {
         const r = this.ids.get(x);
         if(r === undefined) { throw new Error(); }
         return r;
     }
-    public getByID(i: number): T {
-        return this.arr[i];
+    
+    /**
+     * Returns the element associated with the given ID, in O(1) time.
+     */
+    public getByID(id: number): T {
+        if(id < 0 || id >= this.arr.length) { throw new Error() }
+        return this.arr[id];
     }
+    
+    /**
+     * Returns an array of elements whose IDs are present in the given set.
+     */
     public getByIDs(ids: ISet): T[] {
         return ISet.map(ids, id => this.getByID(id));
     }
+    
+    /**
+     * Returns a set containing the IDs of the elements in the given array.
+     */
     public toIDSet(arr: readonly T[]): ISet {
         return ISet.of(arr.map(x => this.getID(x)));
     }
@@ -76,12 +107,23 @@ class SampleableSet<T> {
      */
     private readonly indices = new Map<T, number>();
     
+    /**
+     * Returns the number of elements in the set.
+     */
     public size(): number {
         return this.arr.length;
     }
+    
+    /**
+     * Indicates whether the given value is a member of the set, in O(1) time.
+     */
     public has(x: T): boolean {
         return this.indices.has(x);
     }
+    
+    /**
+     * Adds an element to the set, if it is not already present, in O(1) time.
+     */
     public add(x: T): void {
         const {arr, indices} = this;
         if(!indices.has(x)) {
@@ -89,6 +131,10 @@ class SampleableSet<T> {
             arr.push(x);
         }
     }
+    
+    /**
+     * Deletes an element from the set, if it is present, in O(1) time.
+     */
     public delete(x: T): void {
         const {arr, indices} = this;
         const i = indices.get(x);

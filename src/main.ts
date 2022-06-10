@@ -1,12 +1,11 @@
 ///<reference path="dfa.ts"/>
 ///<reference path="display.ts"/>
 
-function demo() {
-    const GRID_SIZE = 256;
-    const SPEED = 1 << 6;
-    
+function runDemo(size: number = 2): void {
+    const GRID_SIZE = (1 << 7) * size;
+    const SPEED = 16 * size * size;
     const LAKE_SEEDS = 4;
-    const LAKE_SIZE = 128 * 128;
+    const LAKE_SIZE = (1 << 12) * size * size;
     const LAND_SEEDS = 32;
     
     const alphabet = 'BWREI';

@@ -59,6 +59,7 @@ class NFA<S, T> {
         regex: Regex.Node<S, T>,
     ) {
         this.startID = this.makeFromRegex(regex, this.makeNode([]));
+        //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabet.size()}`);
     }
     
     private makeNode(epsilons: number[]): number;
@@ -115,15 +116,14 @@ class NFA<S, T> {
         const {acceptMap} = this;
         
         function getNodeID(nfaState: ISet): number {
-            // epsilon closure
-            let arr = ISet.toArray(nfaState);
-            // this loop iterates over `arr`, while pushing to it
-            for(let i = 0; i < arr.length; ++i) {
-                const nfaNodeID = arr[i];
+            // epsilon closure, by depth-first search
+            const stack = ISet.toArray(nfaState);
+            while(stack.length > 0) {
+                const nfaNodeID = stack.pop()!;
                 for(const eps of nfaNodes[nfaNodeID].epsilons) {
                     if(!ISet.has(nfaState, eps)) {
                         nfaState |= ISet.singleton(eps);
-                        arr.push(eps);
+                        stack.push(eps);
                     }
                 }
             }
@@ -174,23 +174,32 @@ class DFA<T> {
         public readonly acceptMap: IDMap<T>,
         public readonly acceptSetMap: IDMap<ISet>,
         private readonly nodes: readonly DFANode[],
-    ) {}
+    ) {
+        //console.log(`DFA with ${nodes.length} nodes on alphabet of size ${alphabetSize}, ${acceptMap.size()} accepts and ${acceptSetMap.size()} accept sets`);
+    }
     
-    public go(stateID: number, letterID: number): number {
-        const {nodes} = this;
-        if(stateID >= 0 && stateID < nodes.length) {
-            const t = this.nodes[stateID].transitions;
-            return letterID >= 0 && letterID < t.length ? t[letterID] : -1;
+    /**
+     * Returns the number of distinct states of this DFA.
+     */
+    public size(): number {
+        return this.nodes.length;
+    }
+    
+    public go(state: number, letterID: number): number {
+        const {nodes, alphabetSize} = this;
+        if(state >= 0 && state < nodes.length && letterID >= 0 && letterID < alphabetSize) {
+            return nodes[state].transitions[letterID];
         } else {
-            return -1;
+            throw new Error();
         }
     }
     
-    public getAcceptIDs(stateID: number): readonly number[] {
-        return this.nodes[stateID].acceptIDs;
+    public getAcceptIDs(state: number): readonly number[] {
+        return this.nodes[state].acceptIDs;
     }
-    public getAcceptSetID(stateID: number): number {
-        return this.nodes[stateID].acceptSetID;
+    
+    public getAcceptSetID(state: number): number {
+        return this.nodes[state].acceptSetID;
     }
     
     /**
@@ -200,7 +209,7 @@ class DFA<T> {
         const {nodes, acceptMap} = this;
         const table = emptyArray(acceptMap.size(), ISet.EMPTY);
         for(let id = 0; id < nodes.length; ++id) {
-            for(const acceptID of this.getAcceptIDs(id)) {
+            for(const acceptID of nodes[id].acceptIDs) {
                 table[acceptID] |= ISet.singleton(id);
             }
         }
@@ -235,6 +244,9 @@ class DFA<T> {
                 let x = ISet.EMPTY;
                 for(const id of a) { x |= inverseTransitions[c + id * alphabetSize]; }
                 partition.refine(x);
+                
+                // shortcut if the DFA cannot be minimised
+                if(partition.countSubsets() === nodes.length) { return this; }
             }
         }
         

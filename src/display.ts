@@ -24,7 +24,7 @@ function displayGrid(grid: Grid, scale: number = 8) {
     canvasElem.height = grid.height * scale;
     document.getElementsByTagName('body')[0].appendChild(canvasElem);
     const ctx = canvasElem.getContext('2d')!;
-    ctx.fillStyle = PICO8_PALETTE[grid.matcher.alphabet.getByID(0)];
+    ctx.fillStyle = PICO8_PALETTE[grid.alphabet.getByID(0)];
     ctx.fillRect(0, 0, grid.width * scale, grid.height * scale);
     
     grid.listen((minX, minY, maxX, maxY) => {

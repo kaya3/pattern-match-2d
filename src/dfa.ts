@@ -10,56 +10,56 @@ namespace Regex {
         ACCEPT,
     }
     
-    export type Node<T extends PrimitiveKey> = Readonly<
+    export type Node = Readonly<
         | {kind: Kind.LETTERS, letterIDs: readonly number[]}
         | {kind: Kind.WILDCARD}
-        | {kind: Kind.CONCAT, children: readonly Node<T>[]}
-        | {kind: Kind.UNION, children: readonly Node<T>[]}
-        | {kind: Kind.KLEENESTAR, child: Node<T>}
-        | {kind: Kind.ACCEPT, accept: T}
+        | {kind: Kind.CONCAT, children: readonly Node[]}
+        | {kind: Kind.UNION, children: readonly Node[]}
+        | {kind: Kind.KLEENESTAR, child: Node}
+        | {kind: Kind.ACCEPT, accept: number}
     >
     
-    export function letters<T extends PrimitiveKey>(letterIDs: readonly number[]): Node<T> {
+    export function letters(letterIDs: readonly number[]): Node {
         return {kind: Kind.LETTERS, letterIDs};
     }
-    export function wildcard<T extends PrimitiveKey>(): Node<T> {
+    export function wildcard(): Node {
         return {kind: Kind.WILDCARD};
     }
-    export function concat<T extends PrimitiveKey>(children: Node<T>[]): Node<T> {
+    export function concat(children: Node[]): Node {
         return {kind: Kind.CONCAT, children};
     }
-    export function union<T extends PrimitiveKey>(children: Node<T>[]): Node<T> {
+    export function union(children: Node[]): Node {
         return {kind: Kind.UNION, children};
     }
-    export function kleeneStar<T extends PrimitiveKey>(child: Node<T>): Node<T> {
+    export function kleeneStar(child: Node): Node {
         return {kind: Kind.KLEENESTAR, child};
     }
-    export function accept<T extends PrimitiveKey>(accept: T): Node<T> {
+    export function accept(accept: number): Node {
         return {kind: Kind.ACCEPT, accept};
     }
     
-    export function compile<T extends PrimitiveKey>(alphabetSize: number, regex: Node<T>): DFA<T> {
-        return new NFA(alphabetSize, regex).toDFA().minimise();
+    export function compile(alphabetSize: number, acceptCount: number, regex: Node): DFA {
+        return new NFA(alphabetSize, acceptCount, regex).toDFA().minimise();
     }
 }
 
-type NFANode = {
-    readonly epsilons: number[],
-    readonly letters: readonly number[],
-    readonly nextID: number,
-    acceptSet: number[] | undefined,
-}
+type NFANode = Readonly<{
+    epsilons: number[],
+    letters: readonly number[],
+    nextID: number,
+    acceptSet: number[],
+}>
 
-class NFA<T extends PrimitiveKey> {
-    readonly nodes: NFANode[] = [];
-    readonly acceptMap = IDMap.empty<T>();
-    readonly startID: number;
+class NFA {
+    private readonly nodes: NFANode[] = [];
+    private readonly startID: number;
     public constructor(
-        readonly alphabetSize: number,
-        regex: Regex.Node<T>,
+        private readonly alphabetSize: number,
+        private readonly acceptCount: number,
+        regex: Regex.Node,
     ) {
         this.startID = this.makeFromRegex(regex, this.makeNode([]));
-        //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabet.size()}`);
+        //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabetSize}`);
     }
     
     private makeNode(epsilons: number[]): number;
@@ -67,11 +67,11 @@ class NFA<T extends PrimitiveKey> {
     private makeNode(epsilons: number[], letters: readonly number[] = [], nextID: number = -1): number {
         const {nodes} = this;
         const id = nodes.length;
-        nodes.push({epsilons, letters, nextID, acceptSet: undefined});
+        nodes.push({epsilons, letters, nextID, acceptSet: []});
         return id;
     }
     
-    private makeFromRegex(regex: Regex.Node<T>, outID: number): number {
+    private makeFromRegex(regex: Regex.Node, outID: number): number {
         // https://en.wikipedia.org/wiki/Thompson's_construction
         switch(regex.kind) {
             case Regex.Kind.LETTERS: {
@@ -99,16 +99,16 @@ class NFA<T extends PrimitiveKey> {
             }
             case Regex.Kind.ACCEPT: {
                 const node = this.nodes[outID];
-                (node.acceptSet ??= []).push(this.acceptMap.getOrCreateID(regex.accept));
+                node.acceptSet.push(regex.accept);
                 return outID;
             }
         }
     }
     
-    public toDFA(): DFA<T> {
+    public toDFA(): DFA {
         // https://en.wikipedia.org/wiki/Powerset_construction
         
-        const {alphabetSize, nodes, acceptMap} = this;
+        const {alphabetSize, nodes} = this;
         // need to use a primitive key which will be compared by value; bigint is faster than sorting and joining as a string
         const nfaStates: IDMap<ISet> = IDMap.withKey(ISet.toBigInt);
         const dfaNodes: DFANode[] = [];
@@ -138,16 +138,14 @@ class NFA<T extends PrimitiveKey> {
         
         // this loop iterates over `nfaStates`, while adding to it via `getNodeID`
         for(let nfaStateID = 0; nfaStateID < nfaStates.size(); ++nfaStateID) {
-            const transitionStates: MutableISet[] = makeArray(alphabetSize, () => ISet.empty(nodes.length));
+            const transitionStates = makeArray(alphabetSize, () => ISet.empty(nodes.length));
             const acceptIDs: number[] = [];
             ISet.forEach(nfaStates.getByID(nfaStateID), nfaNodeID => {
                 const nfaNode = nodes[nfaNodeID];
                 for(const letterID of nfaNode.letters) {
                     ISet.add(transitionStates[letterID], nfaNode.nextID);
                 }
-                if(nfaNode.acceptSet) {
-                    acceptIDs.push(...nfaNode.acceptSet);
-                }
+                acceptIDs.push(...nfaNode.acceptSet);
             });
             
             dfaNodes.push({
@@ -157,7 +155,7 @@ class NFA<T extends PrimitiveKey> {
             });
         }
         
-        return new DFA(alphabetSize, acceptMap, acceptSetMap, dfaNodes);
+        return new DFA(alphabetSize, this.acceptCount, acceptSetMap, dfaNodes);
     }
 }
 
@@ -167,14 +165,14 @@ type DFANode = Readonly<{
     acceptIDs: readonly number[],
 }>
 
-class DFA<T> {
+class DFA {
     public constructor(
         private readonly alphabetSize: number,
-        public readonly acceptMap: IDMap<T>,
+        public readonly acceptCount: number,
         public readonly acceptSetMap: IDMap<readonly number[]>,
         private readonly nodes: readonly DFANode[],
     ) {
-        //console.log(`DFA with ${nodes.length} nodes on alphabet of size ${alphabetSize}, ${acceptMap.size()} accepts and ${acceptSetMap.size()} accept sets`);
+        //console.log(`DFA with ${nodes.length} nodes on alphabet of size ${alphabetSize}, ${acceptCount} accepts and ${acceptSetMap.size()} accept sets`);
     }
     
     /**
@@ -205,9 +203,9 @@ class DFA<T> {
      * Returns an array mapping each acceptID to the set of node IDs which accept it.
      */
     private computeAcceptingStates(): Iterable<ISet> {
-        const {nodes, acceptMap} = this;
+        const {nodes, acceptCount} = this;
         const n = nodes.length;
-        const table: MutableISet[] = makeArray(acceptMap.size(), () => ISet.empty(n));
+        const table: MutableISet[] = makeArray(acceptCount, () => ISet.empty(n));
         for(let id = 0; id < n; ++id) {
             for(const acceptID of nodes[id].acceptIDs) {
                 ISet.add(table[acceptID], id);
@@ -219,7 +217,7 @@ class DFA<T> {
     /**
      * Returns an equivalent DFA with the minimum possible number of states.
      */
-    public minimise(): DFA<T> {
+    public minimise(): DFA {
         // https://en.wikipedia.org/wiki/DFA_minimization#Hopcroft's_algorithm
         
         const {alphabetSize, nodes} = this;
@@ -260,11 +258,11 @@ class DFA<T> {
         const repNodes: DFANode[] = reps.map(rep => {
             const {transitions, acceptSetID, acceptIDs} = this.nodes[rep];
             return {
-                transitions: transitions.map(id => reps.getID(id)),
+                transitions: transitions.map(nodeID => reps.getID(nodeID)),
                 acceptSetID,
                 acceptIDs,
             };
         });
-        return new DFA(alphabetSize, this.acceptMap, this.acceptSetMap, repNodes);
+        return new DFA(alphabetSize, this.acceptCount, this.acceptSetMap, repNodes);
     }
 }

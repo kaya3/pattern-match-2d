@@ -8,7 +8,7 @@ function runDemo(size: number = 2): void {
     const LAKE_SIZE = (1 << 12) * size * size;
     const LAND_SEEDS = 32;
     
-    const alphabet = 'BWREI';
+    const alphabet = IDMap.of('BWREI');
     const rules = [
         // make a few lakes by random growth
         rule('B', 'I', LAKE_SEEDS),
@@ -34,52 +34,70 @@ function runDemo(size: number = 2): void {
         rule('I', 'B'),
     ];
     
-    type Rule = {
-        readonly rewrites: Record<string, string>,
+    type RuleSpec = {
+        patternIn: string,
+        patternOut: string,
         limit: number | undefined,
     }
-    function rule(p: string, q: string, limit?: number): Rule {
-        return {rewrites: Symmetry.generate(p, q), limit};
+    function rule(patternIn: string, patternOut: string, limit?: number): RuleSpec {
+        return {patternIn, patternOut, limit};
     }
     
-    function applyRule(grid: Grid, rule: Rule): boolean {
+    type Rule = {
+        readonly rewrites: readonly [number, number][],
+        limit: number | undefined,
+    }
+    const patternsIn = IDMap.withKey(Pattern.key);
+    const patternsOut = IDMap.withKey(Pattern.key);
+    const compiledRules = rules.map(spec => {
+        const rewrites: [number, number][] = Symmetry.generate(
+            Pattern.of(alphabet, spec.patternIn),
+            Pattern.of(alphabet, spec.patternOut),
+        ).map(([p, q]) => [
+            patternsIn.getOrCreateID(p),
+            patternsOut.getOrCreateID(q),
+        ]);
+        return {rewrites, limit: spec.limit};
+    });
+    
+    function applyRule(state: MatcherState, rule: Rule): boolean {
         if(rule.limit !== undefined && rule.limit <= 0) { return false; }
         
-        const ruleKeys = Object.keys(rule.rewrites);
-        const counts = ruleKeys.map(p => grid.countMatches(p));
+        const {rewrites} = rule;
+        const counts = rewrites.map(pair => state.countMatches(pair[0]));
         const totalCount = counts.reduce((a, b) => a + b, 0);
+        
         if(totalCount === 0) { return false; }
         
         let r = rng(totalCount);
         for(let i = 0; i < counts.length; ++i) {
             r -= counts[i];
             if(r < 0) {
-                const key = ruleKeys[i];
-                const pos = grid.getRandomMatch(key)!;
-                grid.setPattern(pos.x, pos.y, rule.rewrites[key]);
+                const [pID, qID] = rewrites[i];
+                const pos = state.getRandomMatch(pID)!;
+                state.grid.setPattern(pos.x, pos.y, patternsOut.getByID(qID));
                 if(rule.limit !== undefined) { --rule.limit; }
                 return true;
             }
         }
         throw new Error();
     }
-    function step(grid: Grid, rules: readonly Rule[], k: number): boolean {
+    function step(state: MatcherState, rules: readonly Rule[], k: number): boolean {
         let changed = false;
         for(let i = 0; i < k; ++i) {
-            changed = rules.some(r => applyRule(grid, r));
+            changed = rules.some(r => applyRule(state, r));
             if(!changed) { break; }
         }
         return changed;
     }
     
-    const patterns = [...new Set(rules.flatMap(r => Object.keys(r.rewrites)))];
-    const grid = new PatternMatcher(alphabet, patterns).makeGrid(GRID_SIZE, GRID_SIZE);
+    const state = new PatternMatcher(alphabet, patternsIn).makeState(GRID_SIZE, GRID_SIZE);
     
-    const scale = Math.max(1, Math.floor(window.innerHeight / grid.height));
-    displayGrid(grid, scale);
+    const scale = Math.max(1, Math.floor(window.innerHeight / state.grid.height));
+    displayGrid(state.grid, scale);
     
     function frameHandler(): void {
-        if(step(grid, rules, SPEED)) {
+        if(step(state, compiledRules, SPEED)) {
             requestAnimationFrame(frameHandler);
         }
     }

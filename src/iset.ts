@@ -57,6 +57,12 @@ namespace ISet {
         }
     }
     
+    /**
+     * Converts a set from an array to a `bigint`, in O(N^2) time.
+     * 
+     * Using a primitive type is convenient for Map keys; `number` would only
+     * work for sets with domain sizes of at most 32, and strings are slower.
+     */
     export function arrayToBigInt(xs: readonly number[]): bigint {
         let domainSize = 0;
         for(const x of xs) { domainSize = Math.max(domainSize, x + 1); }

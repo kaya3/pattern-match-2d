@@ -196,25 +196,26 @@ var Regex;
         return { kind: 5 /* ACCEPT */, accept };
     }
     Regex.accept = accept;
-    function compile(alphabetSize, regex) {
-        return new NFA(alphabetSize, regex).toDFA().minimise();
+    function compile(alphabetSize, acceptCount, regex) {
+        return new NFA(alphabetSize, acceptCount, regex).toDFA().minimise();
     }
     Regex.compile = compile;
 })(Regex || (Regex = {}));
 class NFA {
     alphabetSize;
+    acceptCount;
     nodes = [];
-    acceptMap = IDMap.empty();
     startID;
-    constructor(alphabetSize, regex) {
+    constructor(alphabetSize, acceptCount, regex) {
         this.alphabetSize = alphabetSize;
+        this.acceptCount = acceptCount;
         this.startID = this.makeFromRegex(regex, this.makeNode([]));
-        //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabet.size()}`);
+        //console.log(`NFA with ${this.nodes.length} nodes on alphabet of size ${alphabetSize}`);
     }
     makeNode(epsilons, letters = [], nextID = -1) {
         const { nodes } = this;
         const id = nodes.length;
-        nodes.push({ epsilons, letters, nextID, acceptSet: undefined });
+        nodes.push({ epsilons, letters, nextID, acceptSet: [] });
         return id;
     }
     makeFromRegex(regex, outID) {
@@ -245,14 +246,14 @@ class NFA {
             }
             case 5 /* ACCEPT */: {
                 const node = this.nodes[outID];
-                (node.acceptSet ??= []).push(this.acceptMap.getOrCreateID(regex.accept));
+                node.acceptSet.push(regex.accept);
                 return outID;
             }
         }
     }
     toDFA() {
         // https://en.wikipedia.org/wiki/Powerset_construction
-        const { alphabetSize, nodes, acceptMap } = this;
+        const { alphabetSize, nodes } = this;
         // need to use a primitive key which will be compared by value; bigint is faster than sorting and joining as a string
         const nfaStates = IDMap.withKey(ISet.toBigInt);
         const dfaNodes = [];
@@ -286,9 +287,7 @@ class NFA {
                 for (const letterID of nfaNode.letters) {
                     ISet.add(transitionStates[letterID], nfaNode.nextID);
                 }
-                if (nfaNode.acceptSet) {
-                    acceptIDs.push(...nfaNode.acceptSet);
-                }
+                acceptIDs.push(...nfaNode.acceptSet);
             });
             dfaNodes.push({
                 transitions: transitionStates.map(getNodeID),
@@ -296,20 +295,20 @@ class NFA {
                 acceptIDs,
             });
         }
-        return new DFA(alphabetSize, acceptMap, acceptSetMap, dfaNodes);
+        return new DFA(alphabetSize, this.acceptCount, acceptSetMap, dfaNodes);
     }
 }
 class DFA {
     alphabetSize;
-    acceptMap;
+    acceptCount;
     acceptSetMap;
     nodes;
-    constructor(alphabetSize, acceptMap, acceptSetMap, nodes) {
+    constructor(alphabetSize, acceptCount, acceptSetMap, nodes) {
         this.alphabetSize = alphabetSize;
-        this.acceptMap = acceptMap;
+        this.acceptCount = acceptCount;
         this.acceptSetMap = acceptSetMap;
         this.nodes = nodes;
-        //console.log(`DFA with ${nodes.length} nodes on alphabet of size ${alphabetSize}, ${acceptMap.size()} accepts and ${acceptSetMap.size()} accept sets`);
+        //console.log(`DFA with ${nodes.length} nodes on alphabet of size ${alphabetSize}, ${acceptCount} accepts and ${acceptSetMap.size()} accept sets`);
     }
     /**
      * Returns the number of distinct states of this DFA.
@@ -336,9 +335,9 @@ class DFA {
      * Returns an array mapping each acceptID to the set of node IDs which accept it.
      */
     computeAcceptingStates() {
-        const { nodes, acceptMap } = this;
+        const { nodes, acceptCount } = this;
         const n = nodes.length;
-        const table = makeArray(acceptMap.size(), () => ISet.empty(n));
+        const table = makeArray(acceptCount, () => ISet.empty(n));
         for (let id = 0; id < n; ++id) {
             for (const acceptID of nodes[id].acceptIDs) {
                 ISet.add(table[acceptID], id);
@@ -388,12 +387,12 @@ class DFA {
         const repNodes = reps.map(rep => {
             const { transitions, acceptSetID, acceptIDs } = this.nodes[rep];
             return {
-                transitions: transitions.map(id => reps.getID(id)),
+                transitions: transitions.map(nodeID => reps.getID(nodeID)),
                 acceptSetID,
                 acceptIDs,
             };
         });
-        return new DFA(alphabetSize, this.acceptMap, this.acceptSetMap, repNodes);
+        return new DFA(alphabetSize, this.acceptCount, this.acceptSetMap, repNodes);
     }
 }
 // https://lospec.com/palette-list/pico-8
@@ -421,7 +420,7 @@ function displayGrid(grid, scale = 8) {
     canvasElem.height = grid.height * scale;
     document.getElementsByTagName('body')[0].appendChild(canvasElem);
     const ctx = canvasElem.getContext('2d');
-    ctx.fillStyle = PICO8_PALETTE[grid.matcher.alphabet.getByID(0)];
+    ctx.fillStyle = PICO8_PALETTE[grid.alphabet.getByID(0)];
     ctx.fillRect(0, 0, grid.width * scale, grid.height * scale);
     grid.listen((minX, minY, maxX, maxY) => {
         for (let y = minY; y < maxY; ++y) {
@@ -441,9 +440,6 @@ function displayGrid(grid, scale = 8) {
  * matches are reported where the patterns start rather than where they end.
  */
 class PatternMatcher {
-    /**
-     * The alphabet of symbols which can appear in patterns recognised by this matcher.
-     */
     alphabet;
     /**
      * The number of patterns recognised by this matcher.
@@ -459,21 +455,23 @@ class PatternMatcher {
     colDFA;
     acceptSetMapSize;
     acceptSetDiffs;
-    constructor(alphabet, patterns) {
-        this.alphabet = IDMap.of(alphabet);
-        this.numPatterns = patterns.length;
-        const rowPatterns = [...new Set(patterns.flatMap(p => p.split('/')))];
-        const numRowPatterns = rowPatterns.length;
+    constructor(
+    /**
+     * The alphabet of symbols which can appear in patterns recognised by this matcher.
+     */
+    alphabet, patterns) {
+        this.alphabet = alphabet;
+        const numPatterns = this.numPatterns = patterns.size();
+        const rowPatterns = IDMap.ofWithKey(patterns.map(p => p.rows()).flat(), Pattern.key);
         const rowRegex = Regex.concat([
             Regex.kleeneStar(Regex.wildcard()),
-            Regex.union(rowPatterns.map(row => Regex.concat([
-                Regex.concat([...row].reverse().map(c => c === '*' ? Regex.wildcard() : Regex.letters([this.alphabet.getID(c)]))),
-                Regex.accept(row),
+            Regex.union(rowPatterns.map((row, rowID) => Regex.concat([
+                Regex.concat(row.rasterData.map(c => c < 0 ? Regex.wildcard() : Regex.letters([c])).reverse()),
+                Regex.accept(rowID),
             ]))),
         ]);
-        this.rowDFA = Regex.compile(this.alphabet.size(), rowRegex);
-        const rowAcceptMap = this.rowDFA.acceptMap;
-        const acceptingSets = makeArray(rowAcceptMap.size(), () => []);
+        this.rowDFA = Regex.compile(alphabet.size(), rowPatterns.size(), rowRegex);
+        const acceptingSets = makeArray(rowPatterns.size(), () => []);
         this.rowDFA.acceptSetMap.forEach((xs, id) => {
             for (const x of xs) {
                 acceptingSets[x].push(id);
@@ -481,21 +479,21 @@ class PatternMatcher {
         });
         const colRegex = Regex.concat([
             Regex.kleeneStar(Regex.wildcard()),
-            Regex.union(patterns.map(pattern => Regex.concat([
-                Regex.concat(pattern.split('/').reverse().map(row => {
-                    const acceptID = rowAcceptMap.getID(row);
-                    return Regex.letters(acceptingSets[acceptID]);
-                })),
-                Regex.accept(pattern),
+            Regex.union(patterns.map((pattern, patternID) => Regex.concat([
+                Regex.concat(pattern.rows().map(row => {
+                    const rowID = rowPatterns.getID(row);
+                    return Regex.letters(acceptingSets[rowID]);
+                }).reverse()),
+                Regex.accept(patternID),
             ]))),
         ]);
-        this.colDFA = Regex.compile(this.rowDFA.acceptSetMap.size(), colRegex);
+        this.colDFA = Regex.compile(this.rowDFA.acceptSetMap.size(), numPatterns, colRegex);
         // precompute set differences, so that new/broken matches can be iterated in O(1) time per match
         const { acceptSetMap } = this.colDFA;
         this.acceptSetMapSize = acceptSetMap.size();
         const diffs = this.acceptSetDiffs = [];
         acceptSetMap.forEach(q => {
-            const qSet = ISet.of(numRowPatterns, q);
+            const qSet = ISet.of(numPatterns, q);
             acceptSetMap.forEach(p => {
                 const arr = p.filter(x => !ISet.has(qSet, x));
                 diffs.push(arr);
@@ -507,110 +505,51 @@ class PatternMatcher {
         const pID = colDFA.getAcceptSetID(pState), qID = colDFA.getAcceptSetID(qState);
         return this.acceptSetDiffs[pID + k * qID];
     }
-    makeGrid(width, height) {
-        return new Grid(this, width, height);
+    makeState(width, height) {
+        return new MatcherState(this, width, height);
     }
 }
-class Grid {
+class MatcherState {
     matcher;
-    width;
-    height;
-    /**
-     * Maps each index `(x + width * y)` to the ID of the symbol at (x, y).
-     */
     grid;
     /**
-     * Maps each index `(x + width * y)` to the row-DFA state at (x, y).
+     * Maps each `grid.index(x, y)` to the row-DFA state at (x, y).
      */
     rowStates;
     /**
-     * Maps each index `(x + width * y)` to the column-DFA state at (x, y).
+     * Maps each `grid.index(x, y)` to the column-DFA state at (x, y).
      */
     colStates;
     /**
-     * Maps each pattern ID to the set of indices `(x + width * y)` where that pattern is matched at (x, y).
+     * Maps each pattern ID to the set of indices `grid.index(x, y)` where that pattern is matched at (x, y).
      *
      * Invariant: `matchIndices[p].has(i)` if and only if `matcher.colDFA` accepts `p` at state `colStates[i]`
      */
     matchIndices;
-    /**
-     * Array of listeners which will be notified after any area of the grid has changed.
-     */
-    onChange = [];
     constructor(matcher, width, height) {
         this.matcher = matcher;
-        this.width = width;
-        this.height = height;
         const n = width * height;
-        this.grid = makeUintArray(n, matcher.alphabet.size());
         this.rowStates = makeUintArray(n, matcher.rowDFA.size());
         this.colStates = makeUintArray(n, matcher.colDFA.size());
-        this.matchIndices = makeArray(matcher.numPatterns, () => new SampleableSet());
+        this.matchIndices = makeArray(matcher.numPatterns, () => new SampleableSet(n));
+        const grid = this.grid = new Grid(matcher.alphabet, width, height);
+        grid.listen(this.recompute.bind(this));
         this.recompute(0, 0, width, height);
-    }
-    _index(x, y) {
-        if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
-            throw new Error(`Out of bounds: ${x},${y}`);
-        }
-        return x + y * this.width;
-    }
-    get(x, y) {
-        const c = this.grid[this._index(x, y)];
-        return this.matcher.alphabet.getByID(c);
-    }
-    set(x, y, value) {
-        this.grid[this._index(x, y)] = this.matcher.alphabet.getID(value);
-        this.recompute(x, y, x + 1, y + 1);
-    }
-    /**
-     * Writes a pattern into the grid, starting at the coordinates (x, y).
-     *
-     * The pattern is a string with rows separated by `/`; wildcards `*` in the
-     * pattern do not write anything to the grid.
-     */
-    setPattern(x, y, pattern) {
-        const { grid, matcher: { alphabet } } = this;
-        const split = pattern.split('/');
-        let startX = this.width, endX = 0, startY = this.height, endY = 0;
-        for (let j = 0, yj = y; j < split.length; ++j, ++yj) {
-            let row = split[j];
-            for (let i = 0, xi = x; i < row.length; ++i, ++xi) {
-                const c = row[i] === '*' ? -1 : alphabet.getID(row[i]);
-                const index = this._index(xi, yj);
-                if (c >= 0 && c !== grid[index]) {
-                    grid[index] = c;
-                    startX = Math.min(startX, xi);
-                    endX = Math.max(endX, xi + 1);
-                    startY = Math.min(startY, yj);
-                    endY = Math.max(endY, yj + 1);
-                }
-            }
-        }
-        this.recompute(startX, startY, endX, endY);
-    }
-    /**
-     * Registers a callback function, which will be called whenever the grid's
-     * contents change.
-     */
-    listen(f) {
-        this.onChange.push(f);
     }
     /**
      * Returns the number of times the given pattern matches this grid, in O(1) time.
      */
-    countMatches(pattern) {
-        const patternID = this.matcher.colDFA.acceptMap.getID(pattern);
+    countMatches(patternID) {
         return this.matchIndices[patternID].size();
     }
     /**
      * Returns the coordinates of a random match of the given pattern, in O(1) time,
      * or `undefined` if there are no matches.
      */
-    getRandomMatch(pattern) {
-        const { width, matcher: { colDFA } } = this;
-        const patternID = colDFA.acceptMap.getID(pattern);
+    getRandomMatch(patternID) {
         const index = this.matchIndices[patternID].sample();
         if (index !== undefined) {
+            const { width } = this.grid;
             return {
                 x: index % width,
                 y: Math.floor(index / width),
@@ -625,22 +564,19 @@ class Grid {
      * startX/Y (inclusive) to endX/Y (exclusive).
      */
     recompute(startX, startY, endX, endY) {
-        for (const f of this.onChange) {
-            f(startX, startY, endX, endY);
-        }
-        // TODO: move this to PatternMatcher class, using `listen`
-        const { width, height, matcher, grid, rowStates, colStates, matchIndices } = this;
+        const { matcher, grid, rowStates, colStates, matchIndices } = this;
         const { rowDFA, colDFA } = matcher;
+        const { width, height } = grid;
         // the pattern matching is done in reverse, for convenience so that
         // matches are accepted where the patterns start rather than where they end
         // recompute rowStates
         let minChangedX = startX;
         for (let y = startY; y < endY; ++y) {
-            let state = endX === width ? 0 : rowStates[this._index(endX, y)];
+            let state = endX === width ? 0 : rowStates[grid.index(endX, y)];
             for (let x = endX - 1; x >= 0; --x) {
                 // O(1) time per iteration
-                const index = this._index(x, y);
-                state = rowDFA.go(state, grid[index]);
+                const index = grid.index(x, y);
+                state = rowDFA.go(state, grid.grid[index]);
                 if (state !== rowStates[index]) {
                     rowStates[index] = state;
                     minChangedX = Math.min(minChangedX, x);
@@ -652,10 +588,10 @@ class Grid {
         }
         // recompute colStates
         for (let x = minChangedX; x < endX; ++x) {
-            let state = endY === height ? 0 : colStates[this._index(x, endY)];
+            let state = endY === height ? 0 : colStates[grid.index(x, endY)];
             for (let y = endY - 1; y >= 0; --y) {
-                // O(m) time per iteration, where m is the number of new + broken matches
-                const index = this._index(x, y);
+                // O(m + 1) time per iteration, where m is the number of new + broken matches
+                const index = grid.index(x, y);
                 const acceptSetID = rowDFA.getAcceptSetID(rowStates[index]);
                 state = colDFA.go(state, acceptSetID);
                 const oldState = colStates[index];
@@ -677,13 +613,78 @@ class Grid {
         }
     }
 }
+///<reference path="matcher.ts"/>
+class Grid {
+    alphabet;
+    width;
+    height;
+    /**
+     * Maps each `index(x, y)` to the ID of the symbol at (x, y).
+     */
+    grid;
+    /**
+     * Array of listeners which will be notified after any area of the grid has changed.
+     */
+    onChange = [];
+    constructor(alphabet, width, height) {
+        this.alphabet = alphabet;
+        this.width = width;
+        this.height = height;
+        this.grid = makeUintArray(width * height, alphabet.size());
+    }
+    index(x, y) {
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
+            throw new Error(`Out of bounds: ${x},${y}`);
+        }
+        return x + y * this.width;
+    }
+    get(x, y) {
+        const c = this.grid[this.index(x, y)];
+        return this.alphabet.getByID(c);
+    }
+    set(x, y, value) {
+        this.grid[this.index(x, y)] = this.alphabet.getID(value);
+        this.notify(x, y, x + 1, y + 1);
+    }
+    /**
+     * Writes a pattern into the grid, starting at the coordinates (x, y).
+     */
+    setPattern(x, y, pattern) {
+        const { grid } = this;
+        const { vectorData, minX, minY, maxX, maxY } = pattern;
+        for (let i = 0; i < vectorData.length; i += 3) {
+            const dx = vectorData[i];
+            const dy = vectorData[i + 1];
+            const c = vectorData[i + 2];
+            grid[this.index(x + dx, y + dy)] = c;
+        }
+        this.notify(x + minX, y + minY, x + maxX, y + maxY);
+    }
+    /**
+     * Registers a callback function, which will be called whenever the grid's
+     * contents change.
+     */
+    listen(f) {
+        this.onChange.push(f);
+    }
+    /**
+     * Notifies listeners of changes in the rectangular area from startX/Y
+     * (inclusive) to endX/Y (exclusive).
+     */
+    notify(startX, startY, endX, endY) {
+        for (const f of this.onChange) {
+            f(startX, startY, endX, endY);
+        }
+    }
+}
 /**
  * Assigns unique, incremental IDs to a set of values.
  */
 class IDMap {
     keyFunc;
+    static IDENTITY = (x) => x;
     static empty() {
-        return new IDMap(x => x);
+        return new IDMap(IDMap.IDENTITY);
     }
     static withKey(keyFunc) {
         return new IDMap(keyFunc);
@@ -693,7 +694,10 @@ class IDMap {
      * in order of first occurrence.
      */
     static of(iterable) {
-        const map = new IDMap(x => x);
+        return IDMap.ofWithKey(iterable, IDMap.IDENTITY);
+    }
+    static ofWithKey(iterable, keyFunc) {
+        const map = new IDMap(keyFunc);
         for (const x of iterable) {
             map.getOrCreateID(x);
         }
@@ -759,68 +763,6 @@ class IDMap {
     }
 }
 /**
- * A mutable set which can be randomly sampled in O(1) time.
- */
-class SampleableSet {
-    /**
-     * An unordered array of the set's members.
-     */
-    arr = [];
-    /**
-     * Maps the set's members to their indices in `arr`.
-     *
-     * Invariant: `arr[i] === x` if and only if `indices.get(x) === i`
-     */
-    indices = new Map();
-    /**
-     * Returns the number of elements in the set.
-     */
-    size() {
-        return this.arr.length;
-    }
-    /**
-     * Indicates whether the given value is a member of the set, in O(1) time.
-     */
-    has(x) {
-        return this.indices.has(x);
-    }
-    /**
-     * Adds an element to the set, if it is not already present, in O(1) time.
-     */
-    add(x) {
-        const { arr, indices } = this;
-        if (!indices.has(x)) {
-            indices.set(x, arr.length);
-            arr.push(x);
-        }
-    }
-    /**
-     * Deletes an element from the set, if it is present, in O(1) time.
-     */
-    delete(x) {
-        const { arr, indices } = this;
-        const i = indices.get(x);
-        if (i !== undefined) {
-            const j = arr.length - 1;
-            if (i !== j) {
-                const y = arr[j];
-                arr[i] = y;
-                indices.set(y, i);
-            }
-            arr.pop();
-            indices.delete(x);
-        }
-    }
-    /**
-     * Returns a random element from the set in O(1) time, or `undefined` if
-     * the set is empty.
-     */
-    sample() {
-        const { arr } = this;
-        return arr.length > 0 ? arr[rng(arr.length)] : undefined;
-    }
-}
-/**
  * Helper functions for using a typed array as a set of natural numbers.
  *
  * Aggregate operations `addAll`, `toArray` and `forEach` are O(N), where N is
@@ -873,6 +815,12 @@ var ISet;
         }
     }
     ISet.addAll = addAll;
+    /**
+     * Converts a set from an array to a `bigint`, in O(N^2) time.
+     *
+     * Using a primitive type is convenient for Map keys; `number` would only
+     * work for sets with domain sizes of at most 32, and strings are slower.
+     */
     function arrayToBigInt(xs) {
         let domainSize = 0;
         for (const x of xs) {
@@ -931,7 +879,7 @@ function runDemo(size = 2) {
     const LAKE_SEEDS = 4;
     const LAKE_SIZE = (1 << 12) * size * size;
     const LAND_SEEDS = 32;
-    const alphabet = 'BWREI';
+    const alphabet = IDMap.of('BWREI');
     const rules = [
         // make a few lakes by random growth
         rule('B', 'I', LAKE_SEEDS),
@@ -951,15 +899,24 @@ function runDemo(size = 2) {
         // delete water pixels at random, for an animated effect
         rule('I', 'B'),
     ];
-    function rule(p, q, limit) {
-        return { rewrites: Symmetry.generate(p, q), limit };
+    function rule(patternIn, patternOut, limit) {
+        return { patternIn, patternOut, limit };
     }
-    function applyRule(grid, rule) {
+    const patternsIn = IDMap.withKey(Pattern.key);
+    const patternsOut = IDMap.withKey(Pattern.key);
+    const compiledRules = rules.map(spec => {
+        const rewrites = Symmetry.generate(Pattern.of(alphabet, spec.patternIn), Pattern.of(alphabet, spec.patternOut)).map(([p, q]) => [
+            patternsIn.getOrCreateID(p),
+            patternsOut.getOrCreateID(q),
+        ]);
+        return { rewrites, limit: spec.limit };
+    });
+    function applyRule(state, rule) {
         if (rule.limit !== undefined && rule.limit <= 0) {
             return false;
         }
-        const ruleKeys = Object.keys(rule.rewrites);
-        const counts = ruleKeys.map(p => grid.countMatches(p));
+        const { rewrites } = rule;
+        const counts = rewrites.map(pair => state.countMatches(pair[0]));
         const totalCount = counts.reduce((a, b) => a + b, 0);
         if (totalCount === 0) {
             return false;
@@ -968,9 +925,9 @@ function runDemo(size = 2) {
         for (let i = 0; i < counts.length; ++i) {
             r -= counts[i];
             if (r < 0) {
-                const key = ruleKeys[i];
-                const pos = grid.getRandomMatch(key);
-                grid.setPattern(pos.x, pos.y, rule.rewrites[key]);
+                const [pID, qID] = rewrites[i];
+                const pos = state.getRandomMatch(pID);
+                state.grid.setPattern(pos.x, pos.y, patternsOut.getByID(qID));
                 if (rule.limit !== undefined) {
                     --rule.limit;
                 }
@@ -979,22 +936,21 @@ function runDemo(size = 2) {
         }
         throw new Error();
     }
-    function step(grid, rules, k) {
+    function step(state, rules, k) {
         let changed = false;
         for (let i = 0; i < k; ++i) {
-            changed = rules.some(r => applyRule(grid, r));
+            changed = rules.some(r => applyRule(state, r));
             if (!changed) {
                 break;
             }
         }
         return changed;
     }
-    const patterns = [...new Set(rules.flatMap(r => Object.keys(r.rewrites)))];
-    const grid = new PatternMatcher(alphabet, patterns).makeGrid(GRID_SIZE, GRID_SIZE);
-    const scale = Math.max(1, Math.floor(window.innerHeight / grid.height));
-    displayGrid(grid, scale);
+    const state = new PatternMatcher(alphabet, patternsIn).makeState(GRID_SIZE, GRID_SIZE);
+    const scale = Math.max(1, Math.floor(window.innerHeight / state.grid.height));
+    displayGrid(state.grid, scale);
     function frameHandler() {
-        if (step(grid, rules, SPEED)) {
+        if (step(state, compiledRules, SPEED)) {
             requestAnimationFrame(frameHandler);
         }
     }
@@ -1038,39 +994,212 @@ function makeArray(n, f) {
 function rng(n) {
     return Math.floor(Math.random() * n);
 }
-var Symmetry;
-(function (Symmetry) {
+/**
+ * A small rectangular pattern which can be matched in a grid, or written to it.
+ * Patterns may contain wildcards, which match any symbol and do not write
+ * anything to the grid.
+ */
+class Pattern {
+    width;
+    height;
+    rasterData;
+    /**
+     * Creates a pattern from a string.
+     *
+     * The pattern is specified by a string with rows separated by `/`; wildcards
+     * `*` in the pattern match any symbol and do not write anything to the grid.
+     */
+    static of(alphabet, pattern) {
+        const rows = pattern.split('/');
+        const width = rows[0].length;
+        const height = rows.length;
+        if (rows.some(row => row.length !== width)) {
+            throw new Error(pattern);
+        }
+        function symbolToID(c) {
+            return c === '*' ? -1 : alphabet.getID(c);
+        }
+        const rasterData = rows.flatMap(row => [...row].map(symbolToID));
+        return new Pattern(width, height, rasterData);
+    }
     /**
      * Rotates a pattern clockwise by 90 degrees.
      */
-    Symmetry.rotate = p => {
-        const rows = p.split('/');
-        return makeArray(rows[0].length, i => rows.map(row => row[i]).join('')).join('/');
-    };
+    static rotate(pattern) {
+        const { width, height, rasterData } = pattern;
+        const newData = [];
+        for (let x = 0; x < width; ++x) {
+            for (let y = height - 1; y >= 0; --y) {
+                newData.push(rasterData[x + width * y]);
+            }
+        }
+        return new Pattern(height, width, newData);
+    }
     /**
      * Reflects a pattern from top to bottom.
      */
-    Symmetry.reflect = p => {
-        return p.split('/').reverse().join('/');
-    };
-    const GENERATING_SET = [Symmetry.rotate, Symmetry.reflect];
-    function generate(patternIn, patternOut, symmetries = GENERATING_SET) {
-        // depth-first search
-        const entries = [[patternIn, patternOut]];
-        const rewrites = {};
-        while (entries.length > 0) {
-            const [p, q] = entries.pop();
-            rewrites[p] = q;
-            for (const f of symmetries) {
-                const pSym = f(p);
-                if (!(pSym in rewrites)) {
-                    const qSym = f(q);
-                    rewrites[pSym] = qSym;
-                    entries.push([pSym, qSym]);
+    static reflect(pattern) {
+        const { width, height, rasterData } = pattern;
+        const newData = [];
+        for (let y = height - 1; y >= 0; --y) {
+            for (let x = 0; x < width; ++x) {
+                newData.push(rasterData[x + width * y]);
+            }
+        }
+        return new Pattern(width, height, newData);
+    }
+    /**
+     * Returns a string representation of a pattern, for use as a Map key.
+     */
+    static key(pattern) {
+        return pattern._key ??= `${pattern.width}:${pattern.height}:${pattern.rasterData.join(',')}`;
+    }
+    /**
+     * The cached key; see `Pattern.key`.
+     */
+    _key = undefined;
+    /**
+     * A flat array of (x, y, c) triples for each occurrence of a non-wildcard
+     * symbol `c` at a position (x, y) in this pattern.
+     */
+    vectorData;
+    minX;
+    minY;
+    maxX;
+    maxY;
+    constructor(
+    /**
+     * The width of the pattern.
+     */
+    width, 
+    /**
+     * The height of the pattern.
+     */
+    height, 
+    /**
+     * The cells of the pattern. A value of -1 indicates a wildcard.
+     */
+    rasterData) {
+        this.width = width;
+        this.height = height;
+        this.rasterData = rasterData;
+        let minX = width, minY = height, maxX = 0, maxY = 0;
+        const vectorData = this.vectorData = [];
+        for (let y = 0; y < height; ++y) {
+            for (let x = 0; x < width; ++x) {
+                const c = rasterData[x + width * y];
+                if (c >= 0) {
+                    vectorData.push(x, y, c);
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x + 1);
+                    maxY = Math.max(maxY, y + 1);
                 }
             }
         }
-        return rewrites;
+        this.minX = Math.min(minX, maxX);
+        this.minY = Math.min(minY, maxY);
+        this.maxX = maxX;
+        this.maxY = maxY;
+    }
+    /**
+     * Returns the rows of this pattern as an array of (width * 1) patterns.
+     */
+    rows() {
+        const { width, height, rasterData } = this;
+        const out = [];
+        for (let y = 0; y < height; ++y) {
+            const row = rasterData.slice(y * width, (y + 1) * width);
+            out.push(new Pattern(width, 1, row));
+        }
+        return out;
+    }
+}
+/**
+ * A mutable set which can be randomly sampled in O(1) time.
+ */
+class SampleableSet {
+    constructor(domainSize) { }
+    /**
+     * An unordered array of the set's members.
+     */
+    arr = [];
+    /**
+     * Maps the set's members to their indices in `arr`.
+     *
+     * Invariant: `arr[i] === x` if and only if `indices.get(x) === i`
+     */
+    indices = new Map();
+    /**
+     * Returns the number of elements in the set.
+     */
+    size() {
+        return this.arr.length;
+    }
+    /**
+     * Indicates whether the given value is a member of the set, in O(1) time.
+     */
+    has(x) {
+        return this.indices.has(x);
+    }
+    /**
+     * Adds an element to the set, if it is not already present, in O(1) time.
+     */
+    add(x) {
+        const { arr, indices } = this;
+        if (!indices.has(x)) {
+            indices.set(x, arr.length);
+            arr.push(x);
+        }
+    }
+    /**
+     * Deletes an element from the set, if it is present, in O(1) time.
+     */
+    delete(x) {
+        const { arr, indices } = this;
+        const i = indices.get(x);
+        if (i !== undefined) {
+            const j = arr.length - 1;
+            if (i !== j) {
+                const y = arr[j];
+                arr[i] = y;
+                indices.set(y, i);
+            }
+            arr.pop();
+            indices.delete(x);
+        }
+    }
+    /**
+     * Returns a random element from the set in O(1) time, or `undefined` if
+     * the set is empty.
+     */
+    sample() {
+        const { arr } = this;
+        return arr.length > 0 ? arr[rng(arr.length)] : undefined;
+    }
+}
+///<reference path="pattern.ts"/>
+var Symmetry;
+(function (Symmetry) {
+    const GENERATING_SET = [Pattern.rotate, Pattern.reflect];
+    function generate(patternIn, patternOut, symmetries = GENERATING_SET) {
+        // depth-first search
+        const stack = [[patternIn, patternOut]];
+        const entries = new Map();
+        entries.set(Pattern.key(patternIn), [patternIn, patternOut]);
+        while (stack.length > 0) {
+            const [p, q] = stack.pop();
+            for (const f of symmetries) {
+                const pSym = f(p);
+                const key = Pattern.key(pSym);
+                if (!entries.has(key)) {
+                    const pair = [pSym, f(q)];
+                    entries.set(key, pair);
+                    stack.push(pair);
+                }
+            }
+        }
+        return [...entries.values()];
     }
     Symmetry.generate = generate;
 })(Symmetry || (Symmetry = {}));

@@ -23,12 +23,6 @@ class PatternMatcher {
     public readonly rowDFA: DFA<string>;
     
     /**
-     * The alphabet used in `colDFA`; each symbol represents a set of rows which
-     * can be simultaneously matched by `rowDFA`.
-     */
-    public readonly colAlphabet: IDMap<ISet>;
-    
-    /**
      * The DFA which recognises sequences of matches from `rowDFA`.
      */
     public readonly colDFA: DFA<string>;
@@ -41,39 +35,50 @@ class PatternMatcher {
         this.numPatterns = patterns.length;
         
         const rowPatterns = [...new Set(patterns.flatMap(p => p.split('/')))];
-        const rowRegex = Regex.concat<string, string>([
+        const numRowPatterns = rowPatterns.length;
+        const rowRegex = Regex.concat<string>([
             Regex.kleeneStar(Regex.wildcard()),
             Regex.union(
                 rowPatterns.map(row => Regex.concat([
-                    Regex.concat([...row].reverse().map(c => c === '*' ? Regex.wildcard() : Regex.letters([c]))),
+                    Regex.concat([...row].reverse().map(c => c === '*' ? Regex.wildcard() : Regex.letters([this.alphabet.getID(c)]))),
                     Regex.accept(row),
                 ]))
             ),
         ]);
-        this.rowDFA = Regex.compile(this.alphabet, rowRegex);
+        this.rowDFA = Regex.compile(this.alphabet.size(), rowRegex);
         
-        this.colAlphabet = this.rowDFA.acceptSetMap;
-        const colRegex = Regex.concat<ISet, string>([
+        const rowAcceptMap = this.rowDFA.acceptMap;
+        const acceptingSets: number[][] = makeArray(rowAcceptMap.size(), () => []);
+        this.rowDFA.acceptSetMap.forEach((xs, id) => {
+            for(const x of xs) {
+                acceptingSets[x].push(id);
+            }
+        });
+        
+        const colRegex = Regex.concat<string>([
             Regex.kleeneStar(Regex.wildcard()),
             Regex.union(
                 patterns.map(pattern => Regex.concat([
                     Regex.concat(pattern.split('/').reverse().map(row => {
-                        const acceptID = this.rowDFA.acceptMap.getID(row);
-                        return Regex.letters(this.colAlphabet.filter(acceptSet => ISet.has(acceptSet, acceptID)));
+                        const acceptID = rowAcceptMap.getID(row);
+                        return Regex.letters(acceptingSets[acceptID]);
                     })),
                     Regex.accept(pattern),
                 ]))
             ),
         ]);
-        this.colDFA = Regex.compile(this.colAlphabet, colRegex);
+        this.colDFA = Regex.compile(this.rowDFA.acceptSetMap.size(), colRegex);
         
         // precompute set differences, so that new/broken matches can be iterated in O(1) time per match
         const {acceptSetMap} = this.colDFA;
-        const k = this.acceptSetMapSize = acceptSetMap.size();
-        this.acceptSetDiffs = makeArray(k * k, index => {
-            const p = acceptSetMap.getByID(index % k);
-            const q = acceptSetMap.getByID(Math.floor(index / k));
-            return ISet.toArray(p & ~q);
+        this.acceptSetMapSize = acceptSetMap.size();
+        const diffs: (readonly number[])[] = this.acceptSetDiffs = [];
+        acceptSetMap.forEach(q => {
+            const qSet = ISet.of(numRowPatterns, q);
+            acceptSetMap.forEach(p => {
+                const arr = p.filter(x => !ISet.has(qSet, x));
+                diffs.push(arr);
+            });
         });
     }
     

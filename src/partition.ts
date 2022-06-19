@@ -128,7 +128,7 @@ class Partition {
     public pollUnprocessed(): readonly number[] | undefined {
         const {unprocessed} = this;
         while(unprocessed.length > 0) {
-            const subset = this.unprocessed.pop()!;
+            const subset = unprocessed.pop()!;
             // have to check `isUnprocessed` because deleted subsets may still be in the stack
             if(subset.isUnprocessed) {
                 subset.isUnprocessed = false;
@@ -161,20 +161,18 @@ class Partition {
      * Refines this partition by splitting any subsets which partly intersect
      * with the given set. If an unprocessed subset is split, both parts are
      * marked unprocessed; otherwise, the smaller part is marked.
-     * 
-     * The time complexity is linear in the size of the given set.
      */
-    public refine(set: readonly number[]): void {
+    public refine(set: ISet): void {
         const {unprocessed, map} = this;
         const splits: PartitionSubset[] = [];
-        for(const x of set) {
+        ISet.forEach(set, x => {
             const subset = map[x];
             if(subset.sibling === undefined) {
                 splits.push(subset);
                 subset.sibling = this.makeSubset(subset.end, subset.end, subset.isUnprocessed);
             }
             this.moveToSibling(x, subset);
-        }
+        });
         
         for(const subset of splits) {
             if(subset.start === subset.end) {

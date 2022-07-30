@@ -9,6 +9,7 @@ namespace Symmetry {
         // depth-first search
         const stack: [Pattern, Pattern][] = [[patternIn, patternOut]];
         const entries = new Map<string, [Pattern, Pattern]>();
+        // TODO: key should include patternOut
         entries.set(Pattern.key(patternIn), [patternIn, patternOut]);
         while(stack.length > 0) {
             const [p, q] = stack.pop()!;

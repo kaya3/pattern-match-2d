@@ -1,4 +1,3 @@
-
 /**
  * A set of natural numbers, represented using the bits of a typed array.
  */
@@ -17,10 +16,22 @@ type MutableISet = Uint32Array & {__mutable: true}
  */
 namespace ISet {
     /**
-     * Creates an empty set, which can contain numbers less than `domainSize`.
+     * Creates an empty set, which can contain numbers `0 <= x < domainSize`.
      */
     export function empty(domainSize: number): MutableISet {
         return new Uint32Array(((domainSize - 1) >> 5) + 1) as MutableISet;
+    }
+    
+    /**
+     * Creates a set containing the whole domain `0 <= x < domainSize`.
+     */
+    export function full(domainSize: number): MutableISet {
+        const set = empty(domainSize);
+        set.fill(-1);
+        if((domainSize & 31) !== 0) {
+            set[set.length - 1] = (1 << (domainSize & 31)) - 1;
+        }
+        return set;
     }
     
     /**
@@ -41,6 +52,20 @@ namespace ISet {
     }
     
     /**
+     * Returns the size of the set, in O(N) time.
+     */
+    export function size(set: ISet): number {
+        let count = 0;
+        for(let x of set) {
+            while(x !== 0) {
+                x &= x - 1;
+                ++count;
+            }
+        }
+        return count;
+    }
+    
+    /**
      * Adds the element `x` to the set if it not already present, in O(1) time.
      */
     export function add(set: MutableISet, x: number): void {
@@ -48,7 +73,7 @@ namespace ISet {
     }
     
     /**
-     * Adds all the members of `b` to the set `a`, in O(N) time.
+     * Adds all the members of the set `b` to the set `a`, in O(N) time.
      */
     export function addAll(a: MutableISet, b: ISet): void {
         if(a.length < b.length) { throw new Error(); }
@@ -85,7 +110,8 @@ namespace ISet {
     }
     
     /**
-     * Returns a new array of the natural numbers in the given set.
+     * Returns a new array of the natural numbers in the given set, not
+     * necessarily in order.
      */
     export function toArray(set: ISet): number[] {
         const arr: number[] = [];
@@ -104,7 +130,9 @@ namespace ISet {
             while(setPart !== 0) {
                 // position of the highest 1 bit
                 const dx = 31 - Math.clz32(setPart);
+                // 'x ^ dx' is equivalent to `x + dx` here
                 f(x ^ dx);
+                // clear this bit
                 setPart ^= 1 << dx;
             }
         }

@@ -1,3 +1,5 @@
+type IRecord<K extends PropertyKey, V> = {readonly [J in K]: V}
+
 type UintArray = Uint8Array | Uint16Array | Uint32Array
 
 /**

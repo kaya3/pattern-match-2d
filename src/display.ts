@@ -1,5 +1,5 @@
 // https://lospec.com/palette-list/pico-8
-const PICO8_PALETTE: Record<string, string> = {
+const PICO8_PALETTE: IRecord<string, string> = {
     B: '#000000',
     I: '#1D2B53',
     P: '#7E2553',
@@ -22,7 +22,7 @@ function displayGrid(grid: Grid, scale: number = 8) {
     const canvasElem = document.createElement('canvas');
     canvasElem.width = grid.width * scale;
     canvasElem.height = grid.height * scale;
-    document.getElementsByTagName('body')[0].appendChild(canvasElem);
+    document.body.appendChild(canvasElem);
     const ctx = canvasElem.getContext('2d')!;
     ctx.fillStyle = PICO8_PALETTE[grid.alphabet.getByID(0)];
     ctx.fillRect(0, 0, grid.width * scale, grid.height * scale);

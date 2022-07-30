@@ -173,27 +173,27 @@ class Partition {
 var Regex;
 (function (Regex) {
     function letters(letterIDs) {
-        return { kind: 0 /* LETTERS */, letterIDs };
+        return { kind: 0 /* Kind.LETTERS */, letterIDs };
     }
     Regex.letters = letters;
     function wildcard() {
-        return { kind: 1 /* WILDCARD */ };
+        return { kind: 1 /* Kind.WILDCARD */ };
     }
     Regex.wildcard = wildcard;
     function concat(children) {
-        return { kind: 2 /* CONCAT */, children };
+        return { kind: 2 /* Kind.CONCAT */, children };
     }
     Regex.concat = concat;
     function union(children) {
-        return { kind: 3 /* UNION */, children };
+        return { kind: 3 /* Kind.UNION */, children };
     }
     Regex.union = union;
     function kleeneStar(child) {
-        return { kind: 4 /* KLEENESTAR */, child };
+        return { kind: 4 /* Kind.KLEENESTAR */, child };
     }
     Regex.kleeneStar = kleeneStar;
     function accept(accept) {
-        return { kind: 5 /* ACCEPT */, accept };
+        return { kind: 5 /* Kind.ACCEPT */, accept };
     }
     Regex.accept = accept;
     function compile(alphabetSize, acceptCount, regex) {
@@ -221,30 +221,30 @@ class NFA {
     makeFromRegex(regex, outID) {
         // https://en.wikipedia.org/wiki/Thompson's_construction
         switch (regex.kind) {
-            case 0 /* LETTERS */: {
+            case 0 /* Regex.Kind.LETTERS */: {
                 return this.makeNode([], regex.letterIDs, outID);
             }
-            case 1 /* WILDCARD */: {
+            case 1 /* Regex.Kind.WILDCARD */: {
                 return this.makeNode([], makeArray(this.alphabetSize, i => i), outID);
             }
-            case 2 /* CONCAT */: {
+            case 2 /* Regex.Kind.CONCAT */: {
                 const { children } = regex;
                 for (let i = children.length - 1; i >= 0; --i) {
                     outID = this.makeFromRegex(children[i], outID);
                 }
                 return outID;
             }
-            case 3 /* UNION */: {
+            case 3 /* Regex.Kind.UNION */: {
                 const epsilons = regex.children.map(child => this.makeFromRegex(child, this.makeNode([outID])));
                 return this.makeNode(epsilons);
             }
-            case 4 /* KLEENESTAR */: {
+            case 4 /* Regex.Kind.KLEENESTAR */: {
                 const childOutID = this.makeNode([outID]);
                 const childInID = this.makeFromRegex(regex.child, childOutID);
                 this.nodes[childOutID].epsilons.push(childInID);
                 return this.makeNode([childInID, outID]);
             }
-            case 5 /* ACCEPT */: {
+            case 5 /* Regex.Kind.ACCEPT */: {
                 const node = this.nodes[outID];
                 node.acceptSet.push(regex.accept);
                 return outID;
@@ -418,7 +418,7 @@ function displayGrid(grid, scale = 8) {
     const canvasElem = document.createElement('canvas');
     canvasElem.width = grid.width * scale;
     canvasElem.height = grid.height * scale;
-    document.getElementsByTagName('body')[0].appendChild(canvasElem);
+    document.body.appendChild(canvasElem);
     const ctx = canvasElem.getContext('2d');
     ctx.fillStyle = PICO8_PALETTE[grid.alphabet.getByID(0)];
     ctx.fillRect(0, 0, grid.width * scale, grid.height * scale);
@@ -704,6 +704,21 @@ class IDMap {
         return map;
     }
     /**
+     * Returns a new array of the distinct elements from `iterable`, in order
+     * of first occurrence.
+     */
+    static distinct(iterable) {
+        return IDMap.of(iterable).arr;
+    }
+    /**
+     * Returns a new array of the elements from `iterable`, deduplicated using
+     * the given key function, in order of first occurrence. If multiple values
+     * have the same key, only the first is included.
+     */
+    static distinctByKey(iterable, keyFunc) {
+        return IDMap.ofWithKey(iterable, keyFunc).arr;
+    }
+    /**
      * The distinct elements in this map, in insertion order.
      */
     arr = [];
@@ -737,7 +752,15 @@ class IDMap {
         return id;
     }
     /**
-     * Returns the ID of the given element, in O(1) time.
+     * Indicates whether the given element is associated with an ID, in O(1)
+     * time.
+     */
+    has(x) {
+        return this.ids.has(this.keyFunc(x));
+    }
+    /**
+     * Returns the ID of the given element, in O(1) time. An error is thrown if
+     * the element is not associated with an ID.
      */
     getID(x) {
         const id = this.ids.get(this.keyFunc(x));
@@ -747,7 +770,15 @@ class IDMap {
         return id;
     }
     /**
-     * Returns the element associated with the given ID, in O(1) time.
+     * Returns the ID of the given element, or -1 if the given element is not
+     * associated with an ID, in O(1) time.
+     */
+    getIDOrDefault(x) {
+        return this.ids.get(this.keyFunc(x)) ?? -1;
+    }
+    /**
+     * Returns the element associated with the given ID, in O(1) time. An error
+     * is thrown if there is no element with the given ID.
      */
     getByID(id) {
         if (id < 0 || id >= this.arr.length) {
@@ -771,12 +802,24 @@ class IDMap {
 var ISet;
 (function (ISet) {
     /**
-     * Creates an empty set, which can contain numbers less than `domainSize`.
+     * Creates an empty set, which can contain numbers `0 <= x < domainSize`.
      */
     function empty(domainSize) {
         return new Uint32Array(((domainSize - 1) >> 5) + 1);
     }
     ISet.empty = empty;
+    /**
+     * Creates a set containing the whole domain `0 <= x < domainSize`.
+     */
+    function full(domainSize) {
+        const set = empty(domainSize);
+        set.fill(-1);
+        if ((domainSize & 31) !== 0) {
+            set[set.length - 1] = (1 << (domainSize & 31)) - 1;
+        }
+        return set;
+    }
+    ISet.full = full;
     /**
      * Creates a set from an iterable of natural numbers, all of which must be
      * less than `domainSize`.
@@ -797,6 +840,20 @@ var ISet;
     }
     ISet.has = has;
     /**
+     * Returns the size of the set, in O(N) time.
+     */
+    function size(set) {
+        let count = 0;
+        for (let x of set) {
+            while (x !== 0) {
+                x &= x - 1;
+                ++count;
+            }
+        }
+        return count;
+    }
+    ISet.size = size;
+    /**
      * Adds the element `x` to the set if it not already present, in O(1) time.
      */
     function add(set, x) {
@@ -804,7 +861,7 @@ var ISet;
     }
     ISet.add = add;
     /**
-     * Adds all the members of `b` to the set `a`, in O(N) time.
+     * Adds all the members of the set `b` to the set `a`, in O(N) time.
      */
     function addAll(a, b) {
         if (a.length < b.length) {
@@ -845,7 +902,8 @@ var ISet;
     }
     ISet.toBigInt = toBigInt;
     /**
-     * Returns a new array of the natural numbers in the given set.
+     * Returns a new array of the natural numbers in the given set, not
+     * necessarily in order.
      */
     function toArray(set) {
         const arr = [];
@@ -864,7 +922,9 @@ var ISet;
             while (setPart !== 0) {
                 // position of the highest 1 bit
                 const dx = 31 - Math.clz32(setPart);
+                // 'x ^ dx' is equivalent to `x + dx` here
                 f(x ^ dx);
+                // clear this bit
                 setPart ^= 1 << dx;
             }
         }
@@ -1186,6 +1246,7 @@ var Symmetry;
         // depth-first search
         const stack = [[patternIn, patternOut]];
         const entries = new Map();
+        // TODO: key should include patternOut
         entries.set(Pattern.key(patternIn), [patternIn, patternOut]);
         while (stack.length > 0) {
             const [p, q] = stack.pop();

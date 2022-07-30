@@ -4,7 +4,7 @@ type PrimitiveKey = string | number | bigint
  * Assigns unique, incremental IDs to a set of values.
  */
 class IDMap<T> {
-    private static readonly IDENTITY = (x: unknown) => x as PrimitiveKey;
+    private static readonly IDENTITY = <T>(x: T): T => x;
     
     public static empty<T extends PrimitiveKey>(): IDMap<T> {
         return new IDMap<T>(IDMap.IDENTITY);
@@ -26,6 +26,23 @@ class IDMap<T> {
         const map = new IDMap<T>(keyFunc);
         for(const x of iterable) { map.getOrCreateID(x); }
         return map;
+    }
+    
+    /**
+     * Returns a new array of the distinct elements from `iterable`, in order
+     * of first occurrence.
+     */
+    public static distinct<T extends PrimitiveKey>(iterable: Iterable<T>): T[] {
+        return IDMap.of(iterable).arr;
+    }
+    
+    /**
+     * Returns a new array of the elements from `iterable`, deduplicated using
+     * the given key function, in order of first occurrence. If multiple values
+     * have the same key, only the first is included.
+     */
+    public static distinctByKey<T>(iterable: Iterable<T>, keyFunc: (x: T) => PrimitiveKey): T[] {
+        return IDMap.ofWithKey(iterable, keyFunc).arr;
     }
     
     /**
@@ -65,7 +82,16 @@ class IDMap<T> {
     }
     
     /**
-     * Returns the ID of the given element, in O(1) time.
+     * Indicates whether the given element is associated with an ID, in O(1)
+     * time.
+     */
+    public has(x: T): boolean {
+        return this.ids.has(this.keyFunc(x));
+    }
+    
+    /**
+     * Returns the ID of the given element, in O(1) time. An error is thrown if
+     * the element is not associated with an ID.
      */
     public getID(x: T): number {
         const id = this.ids.get(this.keyFunc(x));
@@ -74,7 +100,16 @@ class IDMap<T> {
     }
     
     /**
-     * Returns the element associated with the given ID, in O(1) time.
+     * Returns the ID of the given element, or -1 if the given element is not
+     * associated with an ID, in O(1) time.
+     */
+    public getIDOrDefault(x: T): number {
+        return this.ids.get(this.keyFunc(x)) ?? -1;
+    }
+    
+    /**
+     * Returns the element associated with the given ID, in O(1) time. An error
+     * is thrown if there is no element with the given ID.
      */
     public getByID(id: number): T {
         if(id < 0 || id >= this.arr.length) { throw new Error(); }
